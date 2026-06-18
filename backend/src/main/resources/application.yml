@@ -1,0 +1,29 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: private-document-rag-backend
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/ragdb}
+    username: ${SPRING_DATASOURCE_USERNAME:postgres}
+    password: ${SPRING_DATASOURCE_PASSWORD:postgres}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        format_sql: true
+    open-in-view: false
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 20MB
+
+app:
+  jwt:
+    secret: ${JWT_SECRET:dev-secret-key-change-this-value-minimum-32-chars}
+    expiration-ms: ${JWT_EXPIRATION_MS:86400000}
+  ai:
+    base-url: ${AI_SERVICE_BASE_URL:http://localhost:5000}
+  upload-dir: ${APP_UPLOAD_DIR:uploads}

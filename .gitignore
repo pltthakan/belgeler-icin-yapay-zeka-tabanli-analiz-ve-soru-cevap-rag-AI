@@ -1,0 +1,18 @@
+.DS_Store
+.env
+
+# Java
+backend/target/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Python
+ai-service/.venv/
+ai-service/__pycache__/
+ai-service/data/
+*.pyc
+
+# Runtime uploads
+uploads/
