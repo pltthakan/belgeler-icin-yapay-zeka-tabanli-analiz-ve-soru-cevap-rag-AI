@@ -7,9 +7,9 @@ Bu proje şu akışı gerçekleştirir:
 1. Kullanıcı sisteme kayıt olur / giriş yapar.
 2. PDF, DOCX veya TXT belge yükler.
 3. Spring Boot backend belgeyi kaydeder ve Flask AI servisine gönderir.
-4. Flask servisi metni çıkarır, chunk'lara böler, açık kaynak embedding modeliyle vektörleştirir ve lokal vektör indeksine kaydeder.
+4. Flask servisi PDF/DOCX/TXT metnini (DOCX tabloları dahil) çıkarır, belge profilini oluşturur, chunk'lara böler, açık kaynak embedding modeliyle vektörleştirir ve lokal vektör indeksine kaydeder.
 5. Kullanıcı belge hakkında soru sorar.
-6. Flask servisi en alakalı belge parçalarını bulur, açık kaynak QA modeliyle belgeye dayalı cevap üretir.
+6. Flask servisi soru türüne göre belge profilini veya en alakalı kaynak parçalarını seçer; yapılandırılmışsa yerel LLM ile, değilse QA/extractive fallback ile belgeye dayalı cevap üretir.
 7. Spring Boot cevabı ve kaynakları chat geçmişine kaydeder.
 8. React arayüz cevapları ve kaynak parçaları gösterir.
 
@@ -79,7 +79,9 @@ OLLAMA_TIMEOUT_SECONDS=30
 docker compose up --build -d
 ```
 
-Ollama kapalıysa veya erişilemezse uygulama hata vermez; QA ve kısa, belgeye bağlı extractive fallback ile devam eder.
+Ollama kapalıysa veya erişilemezse uygulama hata vermez. Belge-genel sorular, yükleme sırasında çıkarılan belge profiliyle; ayrıntılı sorular ise QA ve kısa, belgeye bağlı extractive fallback ile cevaplanır.
+
+Mevcut bir belgenin DOCX tablo çıkarımı ve yeni indeksleme kurallarından yararlanması için ana ekrandaki **Yeniden indeksle** düğmesini kullanın. Başarısız bir yeniden indeksleme, önceki başarılı indeksi silmez.
 
 ## IDE önerisi
 
@@ -171,6 +173,7 @@ POST /api/auth/login
 POST /api/documents/upload
 GET  /api/documents
 GET  /api/documents/{id}
+POST /api/documents/{id}/reindex
 DELETE /api/documents/{id}
 ```
 

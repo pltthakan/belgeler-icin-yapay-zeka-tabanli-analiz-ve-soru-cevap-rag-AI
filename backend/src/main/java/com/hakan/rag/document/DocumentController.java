@@ -104,6 +104,33 @@ public class DocumentController {
         return ResponseEntity.ok(DocumentResponse.from(document));
     }
 
+    @PostMapping("/{id}/reindex")
+    public ResponseEntity<DocumentResponse> reindex(@PathVariable Long id) throws Exception {
+        User user = currentUserService.getCurrentUser();
+        DocumentFile document = documentRepository.findByIdAndOwner(id, user)
+                .orElseThrow(() -> new IllegalArgumentException("Belge bulunamadı."));
+
+        DocumentStatus previousStatus = document.getStatus();
+        document.setStatus(DocumentStatus.PROCESSING);
+        document.setErrorMessage(null);
+        documentRepository.save(document);
+
+        try {
+            AiIngestResponse aiResponse = sendStoredFileToAiService(document);
+            document.setStatus(DocumentStatus.READY);
+            document.setChunkCount(aiResponse.chunkCount());
+            document.setErrorMessage(null);
+        } catch (Exception ex) {
+            // AI servisi indeksi atomik güncellediği için önceki başarılı indeks
+            // kullanılabilir durumda kalır. Eski READY durumunu koru.
+            document.setStatus(previousStatus == DocumentStatus.READY ? DocumentStatus.READY : DocumentStatus.FAILED);
+            document.setErrorMessage("Yeniden indeksleme başarısız: " + ex.getMessage());
+        }
+
+        documentRepository.save(document);
+        return ResponseEntity.ok(DocumentResponse.from(document));
+    }
+
     @DeleteMapping("/{id}")
     @Transactional
     public ResponseEntity<Void> delete(@PathVariable Long id) {
@@ -116,10 +143,26 @@ public class DocumentController {
     }
 
     private AiIngestResponse sendFileToAiService(Long documentId, MultipartFile file) throws Exception {
-        ByteArrayResource fileResource = new ByteArrayResource(file.getBytes()) {
+        return sendBytesToAiService(documentId, file.getBytes(), file.getOriginalFilename());
+    }
+
+    private AiIngestResponse sendStoredFileToAiService(DocumentFile document) throws Exception {
+        if (document.getStoredPath() == null || document.getStoredPath().isBlank()) {
+            throw new IllegalStateException("Belgenin saklanan dosya yolu bulunamadı.");
+        }
+
+        Path path = Paths.get(document.getStoredPath());
+        if (!Files.isRegularFile(path)) {
+            throw new IllegalStateException("Belgenin saklanan dosyası bulunamadı.");
+        }
+        return sendBytesToAiService(document.getId(), Files.readAllBytes(path), document.getOriginalFilename());
+    }
+
+    private AiIngestResponse sendBytesToAiService(Long documentId, byte[] bytes, String filename) {
+        ByteArrayResource fileResource = new ByteArrayResource(bytes) {
             @Override
             public String getFilename() {
-                return file.getOriginalFilename();
+                return filename;
             }
         };
 

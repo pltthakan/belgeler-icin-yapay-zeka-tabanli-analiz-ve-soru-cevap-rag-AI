@@ -8,6 +8,7 @@ export default function Dashboard() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [reindexingId, setReindexingId] = useState(null)
 
   const loadDocuments = async () => {
     setLoading(true)
@@ -59,6 +60,19 @@ export default function Dashboard() {
     }
   }
 
+  const reindex = async (id) => {
+    setReindexingId(id)
+    setError('')
+    try {
+      await api.post(`/api/documents/${id}/reindex`)
+      await loadDocuments()
+    } catch (err) {
+      setError(getErrorMessage(err))
+    } finally {
+      setReindexingId(null)
+    }
+  }
+
   return (
     <div>
       <section className="hero">
@@ -95,6 +109,9 @@ export default function Dashboard() {
               {doc.errorMessage && <p className="error-text">{doc.errorMessage}</p>}
               <div className="card-actions">
                 <Link className={doc.status === 'READY' ? 'button-link' : 'button-link disabled'} to={doc.status === 'READY' ? `/documents/${doc.id}/chat` : '#'}>Sohbet</Link>
+                <button className="ghost" disabled={doc.status !== 'READY' || reindexingId === doc.id} onClick={() => reindex(doc.id)}>
+                  {reindexingId === doc.id ? 'İndeksleniyor...' : 'Yeniden indeksle'}
+                </button>
                 <button className="danger" onClick={() => remove(doc.id)}>Sil</button>
               </div>
             </article>
