@@ -1,4 +1,5 @@
 import io
+import os
 import tempfile
 import unittest
 
@@ -9,11 +10,23 @@ from rag_engine import RagEngine
 
 class RagEngineAnswerTests(unittest.TestCase):
     def setUp(self):
+        self.previous_ollama_base_url = os.environ.get("OLLAMA_BASE_URL")
+        self.previous_ollama_model = os.environ.get("OLLAMA_MODEL")
+        os.environ["OLLAMA_BASE_URL"] = ""
+        os.environ["OLLAMA_MODEL"] = ""
         self.data_dir = tempfile.TemporaryDirectory()
         self.engine = RagEngine(self.data_dir.name)
 
     def tearDown(self):
         self.data_dir.cleanup()
+        self._restore_environment_variable("OLLAMA_BASE_URL", self.previous_ollama_base_url)
+        self._restore_environment_variable("OLLAMA_MODEL", self.previous_ollama_model)
+
+    def _restore_environment_variable(self, name, value):
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
 
     def test_document_overview_questions_use_the_same_document_profile(self):
         chunks = [{
@@ -55,6 +68,12 @@ class RagEngineAnswerTests(unittest.TestCase):
         )
 
         self.assertEqual(passage, "Ödenen ücrette memnun musunuz?")
+
+    def test_qa_quality_gate_rejects_single_character_spans(self):
+        self.assertFalse(self.engine._is_usable_qa_answer("I"))
+        self.assertFalse(self.engine._is_usable_qa_answer(" "))
+        self.assertTrue(self.engine._is_usable_qa_answer("30"))
+        self.assertTrue(self.engine._is_usable_qa_answer("Öğrencilerin hakları"))
 
     def test_docx_extraction_includes_table_cells_in_document_order(self):
         document = Document()
