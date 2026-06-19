@@ -3,6 +3,8 @@ import json
 import math
 import os
 import re
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -27,6 +29,12 @@ class RagEngine:
             "deepset/xlm-roberta-base-squad2",
         )
         self.disable_qa_model = os.getenv("DISABLE_QA_MODEL", "false").lower() == "true"
+
+        # Ollama isteğe bağlıdır. Değişkenler ayarlanmadığında her soru için
+        # yerel modele bağlanmayı denemeden QA fallback ile devam edilir.
+        self.ollama_base_url = os.getenv("OLLAMA_BASE_URL", "").rstrip("/")
+        self.ollama_model = os.getenv("OLLAMA_MODEL", "").strip()
+        self.ollama_timeout_seconds = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "30"))
 
         self._embedding_model = None
         self._qa_pipeline = None
@@ -85,7 +93,7 @@ class RagEngine:
                 "text": chunk.get("text", ""),
             })
 
-        answer = self._build_answer(question, selected_sources)
+        answer = self._build_answer(question, selected_sources, chunks)
         return {
             "answer": answer,
             "sources": selected_sources,
@@ -175,13 +183,28 @@ class RagEngine:
             self._qa_pipeline = None
             return None
 
-    def _build_answer(self, question: str, sources: List[Dict[str, Any]]) -> str:
+    def _build_answer(
+        self,
+        question: str,
+        sources: List[Dict[str, Any]],
+        all_chunks: List[Dict[str, Any]],
+    ) -> str:
         if not sources:
             return "Bu belge içinde soruyla ilişkili bir bölüm bulunamadı."
 
-        context = "\n\n".join(source["text"] for source in sources)
-        qa_pipeline = self._get_qa_pipeline()
+        # "Ana konusu nedir?" bir span-extraction sorusu değildir. Retrieval ile
+        # gelen son sayfadaki bir anket sorusunu döndürmek yerine belge başlığını
+        # kullanmak, modelin yüklenemediği ortamlarda da kararlı sonuç verir.
+        if self._is_topic_question(question):
+            topic = self._extract_document_topic(all_chunks)
+            if topic:
+                return f"Bu belgenin ana konusu: {topic}."
 
+        generated_answer = self._answer_with_ollama(question, sources)
+        if generated_answer:
+            return generated_answer
+
+        qa_pipeline = self._get_qa_pipeline()
         if qa_pipeline is not None:
             best_answer = None
             best_score = -1.0
@@ -197,20 +220,165 @@ class RagEngine:
                     continue
 
             if best_answer and best_score >= 0.02:
-                return (
-                    "Belgedeki ilgili bölümlere göre cevap: "
-                    f"{best_answer}\n\n"
-                    "Not: Cevap, aşağıdaki kaynak parçalar kullanılarak üretildi."
-                )
+                return f"Belgeye göre: {best_answer}"
 
-        # Fallback cevap: en alakalı kaynak parçasından kısa belgeye dayalı özet.
-        best_text = sources[0]["text"]
-        short_text = self._shorten(best_text, max_chars=900)
-        return (
-            "Belgedeki en alakalı bölüm şu bilgiyi veriyor:\n\n"
-            f"{short_text}\n\n"
-            "Bu cevap doğrudan belge parçalarına dayalıdır. Daha net sonuç için soruyu daha spesifik sorabilirsin."
+        # Model kullanılamadığında ham 900 karakterlik chunk döndürmek yerine,
+        # soruyla en fazla kesişen kısa cümleleri seç.
+        short_text = self._extract_relevant_passage(question, sources[0]["text"])
+        return f"Belgeye göre: {short_text}"
+
+    def _is_topic_question(self, question: str) -> bool:
+        normalized = self._normalize_for_matching(question)
+        markers = (
+            "ana konusu",
+            "ana konu",
+            "belgenin konusu",
+            "dokumanin konusu",
+            "ne hakkında",
+            "konusu nedir",
+            "genel konusu",
         )
+        return any(marker in normalized for marker in markers)
+
+    def _extract_document_topic(self, chunks: List[Dict[str, Any]]) -> str | None:
+        """Belge başındaki en anlamlı başlığı, ana konu soruları için döndürür."""
+        if not chunks:
+            return None
+
+        opening_text = chunks[0].get("text", "")
+        lines = [self._normalize_whitespace(line) for line in opening_text.splitlines()]
+        candidates = [
+            line for line in lines
+            if 12 <= len(line) <= 280 and self._contains_letters(line)
+        ]
+        if not candidates and opening_text:
+            first_sentence = re.split(r"(?<=[.!?])\s+", opening_text, maxsplit=1)[0]
+            candidates = [self._normalize_whitespace(first_sentence)]
+
+        # Birçok kurumsal belgede üst bilgi, ders/alan adı ve gerçek belge başlığı
+        # ayrı satırlarda yazılır. Örneğin "... EĞİTİM DERSİ" + "... ANKETİ".
+        # Başlık türünü içeren satırı ve gerekiyorsa hemen önceki üst başlığı birlikte
+        # döndürmek, kurum adını tek başına konu diye göstermeyi engeller.
+        heading_lines = []
+        for candidate in candidates[:6]:
+            if self._looks_like_heading(candidate):
+                heading_lines.append(candidate)
+            elif heading_lines:
+                break
+
+        title_markers = (
+            "anket", "form", "rapor", "sozlesme", "şartname", "sartname",
+            "kilavuz", "kılavuz", "yonerge", "yönerge", "prosedur", "prosedür",
+            "politika", "talimat",
+        )
+        for index, candidate in enumerate(heading_lines):
+            normalized = self._normalize_for_matching(candidate)
+            if any(marker in normalized for marker in title_markers):
+                title_parts = heading_lines[max(0, index - 1):index + 1]
+                return " — ".join(part.rstrip(".:") for part in title_parts)
+
+        for candidate in candidates:
+            # Formlarda başlığın hemen altındaki "öğrenci bilgileri" gibi bölüm
+            # adlarını değil, belgenin gerçek üst başlığını tercih et.
+            if self._normalize_for_matching(candidate) not in {"ogrenci bilgileri", "icerindekiler"}:
+                return candidate.rstrip(".:")
+        return None
+
+    def _answer_with_ollama(self, question: str, sources: List[Dict[str, Any]]) -> str | None:
+        """Yapılandırılmışsa kaynaklarla sınırlı bir Ollama cevabı üretir."""
+        if not self.ollama_base_url or not self.ollama_model:
+            return None
+
+        context_parts = []
+        for position, source in enumerate(sources, start=1):
+            context_parts.append(f"KAYNAK {position}:\n{source.get('text', '')}")
+        context = "\n\n---\n\n".join(context_parts)
+        prompt = f"""Sen, yalnızca verilen belge parçalarına göre cevap veren Türkçe bir belge asistanısın.
+Kurallar:
+- Sadece BELGE BAĞLAMI'ndaki bilgiye dayan; bağlamda yoksa bunu açıkça belirt.
+- Soruyu doğrudan, en fazla 3 kısa cümleyle cevapla.
+- Ham kaynak metnini veya 'Kaynak 1' ifadelerini tekrar etme.
+- Varsayım, uydurma bilgi ve genel tavsiye ekleme.
+
+SORU:
+{question}
+
+BELGE BAĞLAMI:
+{context}
+
+CEVAP:"""
+        payload = json.dumps({
+            "model": self.ollama_model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {"temperature": 0.1},
+        }).encode("utf-8")
+        request = urllib.request.Request(
+            f"{self.ollama_base_url}/api/generate",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.ollama_timeout_seconds) as response:
+                result = json.loads(response.read().decode("utf-8"))
+            answer = str(result.get("response", "")).strip()
+            return answer or None
+        except (urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
+            print(f"Ollama cevabı alınamadı, QA fallback kullanılacak: {exc}")
+            return None
+
+    def _extract_relevant_passage(self, question: str, text: str) -> str:
+        sentences = [
+            self._normalize_whitespace(sentence)
+            for sentence in re.split(r"(?<=[.!?])\s+|\n+", text)
+            if self._normalize_whitespace(sentence)
+        ]
+        if not sentences:
+            return self._shorten(text, max_chars=450)
+
+        question_terms = self._meaningful_terms(question)
+        scored = []
+        for index, sentence in enumerate(sentences):
+            sentence_terms = set(self._meaningful_terms(sentence))
+            overlap = len(question_terms & sentence_terms)
+            scored.append((overlap, -index, sentence))
+
+        matching = [item for item in scored if item[0] > 0]
+        if not matching:
+            return self._shorten(sentences[0], max_chars=450)
+
+        best = sorted(matching, reverse=True)[:2]
+        selected = sorted(best, key=lambda item: -item[1])
+        return self._shorten(" ".join(item[2] for item in selected), max_chars=550)
+
+    def _meaningful_terms(self, text: str) -> set[str]:
+        stop_words = {
+            "acaba", "ama", "bir", "bu", "bunu", "da", "de", "gibi", "icin", "ile",
+            "mi", "mı", "mu", "mü", "nasıl", "ne", "nedir", "olan", "olarak", "soru",
+            "su", "şu", "ve", "veya", "ya", "belge", "belgede", "belgenin", "dokuman", "dokumanda",
+        }
+        return {
+            term for term in re.findall(r"[a-zçğıöşü0-9]+", self._normalize_for_matching(text))
+            if len(term) > 2 and term not in stop_words
+        }
+
+    def _normalize_for_matching(self, text: str) -> str:
+        # Türkçe I/İ dönüşümünü lower() tek başına düzgün normalize etmez.
+        return text.replace("I", "ı").replace("İ", "i").lower()
+
+    def _normalize_whitespace(self, text: str) -> str:
+        return re.sub(r"\s+", " ", text).strip()
+
+    def _contains_letters(self, text: str) -> bool:
+        return bool(re.search(r"[A-Za-zÇĞİÖŞÜçğıöşü]", text))
+
+    def _looks_like_heading(self, text: str) -> bool:
+        letters = re.findall(r"[A-Za-zÇĞİÖŞÜçğıöşü]", text)
+        if not letters or "?" in text:
+            return False
+        uppercase_letters = [letter for letter in letters if letter.isupper()]
+        return len(uppercase_letters) / len(letters) >= 0.7
 
     def _load_index(self, document_id: str) -> Dict[str, Any]:
         index_path = self._index_path(document_id)
