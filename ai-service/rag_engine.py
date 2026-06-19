@@ -269,7 +269,7 @@ class RagEngine:
                 except Exception:
                     continue
 
-            if best_answer and best_score >= 0.02:
+            if best_answer and best_score >= 0.02 and self._is_usable_qa_answer(best_answer):
                 return f"Belgeye göre: {best_answer}"
 
         # Model kullanılamadığında ham 900 karakterlik chunk döndürmek yerine,
@@ -421,6 +421,10 @@ CEVAP:"""
             "model": self.ollama_model,
             "prompt": prompt,
             "stream": False,
+            # Qwen3 thinking modunda önce iç muhakemeyi üretir. Kısa RAG
+            # cevaplarında bu, çıktı bütçesini tüketip response alanını boş
+            # bırakabildiği için kapatılır.
+            "think": False,
             "options": {"temperature": 0, "num_predict": 256},
         }).encode("utf-8")
         request = urllib.request.Request(
@@ -461,6 +465,18 @@ CEVAP:"""
         best = sorted(matching, reverse=True)[:2]
         selected = sorted(best, key=lambda item: -item[1])
         return self._shorten(" ".join(item[2] for item in selected), max_chars=550)
+
+    def _is_usable_qa_answer(self, answer: str) -> bool:
+        """Extractive QA'nın tek karakterli veya boş span'lerini reddeder."""
+        cleaned = self._normalize_whitespace(answer)
+        if not cleaned:
+            return False
+
+        if re.fullmatch(r"[0-9]+([.,][0-9]+)?", cleaned):
+            return True
+
+        letter_count = len(re.findall(r"[A-Za-zÇĞİÖŞÜçğıöşü]", cleaned))
+        return len(cleaned) >= 3 and letter_count >= 2
 
     def _meaningful_terms(self, text: str) -> set[str]:
         stop_words = {
