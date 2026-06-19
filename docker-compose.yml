@@ -24,6 +24,10 @@ services:
       EMBEDDING_MODEL_NAME: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
       QA_MODEL_NAME: deepset/xlm-roberta-base-squad2
       DISABLE_QA_MODEL: "false"
+      # İsteğe bağlı Ollama entegrasyonu. Ayarlanmadığında extractive QA fallback kullanılır.
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-}
+      OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-30}
     ports:
       - "5001:5000"
     volumes:

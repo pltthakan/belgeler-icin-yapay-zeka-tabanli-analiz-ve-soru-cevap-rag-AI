@@ -59,6 +59,28 @@ Varsayılan açık kaynak modeller:
 
 > Not: İlk çalıştırmada modeller Hugging Face üzerinden indirileceği için internet gerekir. İndirme bittikten sonra cache üzerinden çalışır.
 
+### Doğal dilde cevap üretimi (isteğe bağlı Ollama)
+
+Varsayılan akış, soru-cevap modelini kullanır; bu model metinden cevap parçası çıkarır. `Ana konusu nedir?` gibi belgeyi bütün olarak yorumlamayı gerektiren sorularda sistem doğrudan belge başlığını kullanır. Daha doğal, kısa cevaplar için yerel bir Ollama modeli eklenebilir:
+
+```bash
+ollama pull qwen2.5:7b
+```
+
+Docker Desktop üzerinde proje kökünde `.env` dosyasına aşağıdakileri ekleyip servisleri yeniden oluşturun:
+
+```text
+OLLAMA_BASE_URL=http://host.docker.internal:11434
+OLLAMA_MODEL=qwen2.5:7b
+OLLAMA_TIMEOUT_SECONDS=30
+```
+
+```bash
+docker compose up --build -d
+```
+
+Ollama kapalıysa veya erişilemezse uygulama hata vermez; QA ve kısa, belgeye bağlı extractive fallback ile devam eder.
+
 ## IDE önerisi
 
 En rahat kullanım:

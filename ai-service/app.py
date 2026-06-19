@@ -18,6 +18,7 @@ def health():
         "service": "private-document-rag-ai-service",
         "embeddingModel": rag_engine.embedding_model_name,
         "qaModel": rag_engine.qa_model_name,
+        "localLlmEnabled": bool(rag_engine.ollama_base_url and rag_engine.ollama_model),
     })
 
 
