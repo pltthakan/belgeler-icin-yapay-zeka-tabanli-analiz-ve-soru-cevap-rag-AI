@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:0.8.2-pg16
     container_name: rag-postgres
     environment:
       POSTGRES_DB: ragdb
@@ -28,6 +28,7 @@ services:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-}
       OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-30}
+      PGVECTOR_DSN: postgresql://postgres:postgres@postgres:5432/ragdb
     ports:
       - "5001:5000"
     volumes:
@@ -54,6 +55,7 @@ services:
       JWT_SECRET: dev-secret-key-change-this-value-minimum-32-chars
       AI_SERVICE_BASE_URL: http://ai-service:5000
       APP_UPLOAD_DIR: /app/uploads
+      APP_BOOTSTRAP_ADMIN_EMAIL: ${APP_BOOTSTRAP_ADMIN_EMAIL:-}
     ports:
       - "8080:8080"
     volumes:

@@ -6,6 +6,8 @@ import com.hakan.rag.auth.dto.RegisterRequest;
 import com.hakan.rag.security.JwtService;
 import com.hakan.rag.user.User;
 import com.hakan.rag.user.UserRepository;
+import com.hakan.rag.user.UserRole;
+import org.springframework.beans.factory.annotation.Value;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -21,11 +23,18 @@ public class AuthController {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
+    private final String bootstrapAdminEmail;
 
-    public AuthController(UserRepository userRepository, PasswordEncoder passwordEncoder, JwtService jwtService) {
+    public AuthController(
+            UserRepository userRepository,
+            PasswordEncoder passwordEncoder,
+            JwtService jwtService,
+            @Value("${app.bootstrap-admin-email:}") String bootstrapAdminEmail
+    ) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
+        this.bootstrapAdminEmail = bootstrapAdminEmail == null ? "" : bootstrapAdminEmail.trim();
     }
 
     @PostMapping("/register")
@@ -38,10 +47,13 @@ public class AuthController {
         user.setName(request.name());
         user.setEmail(request.email().toLowerCase().trim());
         user.setPasswordHash(passwordEncoder.encode(request.password()));
+        if (!bootstrapAdminEmail.isBlank() && bootstrapAdminEmail.equalsIgnoreCase(user.getEmail())) {
+            user.setRole(UserRole.ADMIN);
+        }
         userRepository.save(user);
 
         String token = jwtService.generateToken(user);
-        return ResponseEntity.ok(new AuthResponse(token, user.getId(), user.getName(), user.getEmail()));
+        return ResponseEntity.ok(new AuthResponse(token, user.getId(), user.getName(), user.getEmail(), user.getRole()));
     }
 
     @PostMapping("/login")
@@ -54,6 +66,6 @@ public class AuthController {
         }
 
         String token = jwtService.generateToken(user);
-        return ResponseEntity.ok(new AuthResponse(token, user.getId(), user.getName(), user.getEmail()));
+        return ResponseEntity.ok(new AuthResponse(token, user.getId(), user.getName(), user.getEmail(), user.getRole()));
     }
 }

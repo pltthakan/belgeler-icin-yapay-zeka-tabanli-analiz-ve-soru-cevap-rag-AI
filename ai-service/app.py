@@ -19,12 +19,15 @@ def health():
         "embeddingModel": rag_engine.embedding_model_name,
         "qaModel": rag_engine.qa_model_name,
         "localLlmEnabled": bool(rag_engine.ollama_base_url and rag_engine.ollama_model),
+        "vectorStore": "pgvector" if rag_engine._vector_store is not None else "json-fallback",
     })
 
 
 @app.post("/api/ingest")
 def ingest():
     document_id = request.form.get("documentId")
+    owner_id = request.form.get("ownerId")
+    department_id = request.form.get("departmentId")
     file = request.files.get("file")
 
     if not document_id:
@@ -33,7 +36,12 @@ def ingest():
         return jsonify({"message": "file zorunludur."}), 400
 
     try:
-        result = rag_engine.ingest_document(document_id=document_id, file_storage=file)
+        result = rag_engine.ingest_document(
+            document_id=document_id,
+            file_storage=file,
+            owner_id=owner_id,
+            department_id=department_id,
+        )
         return jsonify(result)
     except Exception as exc:
         return jsonify({"message": str(exc)}), 500
@@ -56,6 +64,15 @@ def ask():
         return jsonify(result)
     except FileNotFoundError:
         return jsonify({"message": "Bu belge için vektör indeksi bulunamadı."}), 404
+    except Exception as exc:
+        return jsonify({"message": str(exc)}), 500
+
+
+@app.delete("/api/index/<document_id>")
+def delete_index(document_id):
+    try:
+        rag_engine.delete_document(document_id)
+        return jsonify({"documentId": document_id, "deleted": True})
     except Exception as exc:
         return jsonify({"message": str(exc)}), 500
 

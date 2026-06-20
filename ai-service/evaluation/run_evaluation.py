@@ -15,6 +15,9 @@ from rag_engine import RagEngine
 
 def build_engine(data_dir: str, use_ollama: bool) -> RagEngine:
     engine = RagEngine(data_dir)
+    # Değerlendirme geçici JSON indeksleri kullanır; gerçek pgvector tablosuna
+    # sentetik test verisi yazılmaz.
+    engine._vector_store = None
 
     # Değerlendirmenin ağ/model indirmelerine bağlı olmaması için retrieval
     # tarafında deterministik hashing embedding kullanılır.

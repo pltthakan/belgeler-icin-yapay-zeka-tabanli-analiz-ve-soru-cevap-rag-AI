@@ -1,0 +1,12 @@
+package com.hakan.rag.audit;
+
+public enum AuditAction {
+    DOCUMENT_UPLOADED,
+    DOCUMENT_LISTED,
+    DOCUMENT_VIEWED,
+    DOCUMENT_REINDEXED,
+    DOCUMENT_SHARED,
+    DOCUMENT_DELETED,
+    CHAT_QUESTION_ASKED,
+    CHAT_HISTORY_VIEWED
+}

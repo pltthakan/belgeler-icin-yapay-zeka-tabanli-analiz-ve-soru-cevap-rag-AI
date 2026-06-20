@@ -2,6 +2,7 @@ import io
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -15,6 +16,7 @@ from docx.table import Table
 from docx.text.paragraph import Paragraph
 from pypdf import PdfReader
 from sklearn.feature_extraction.text import HashingVectorizer
+from vector_store import PgVectorStore
 
 
 class RagEngine:
@@ -38,6 +40,8 @@ class RagEngine:
         self.ollama_base_url = os.getenv("OLLAMA_BASE_URL", "").rstrip("/")
         self.ollama_model = os.getenv("OLLAMA_MODEL", "").strip()
         self.ollama_timeout_seconds = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "30"))
+        self.pgvector_dsn = os.getenv("PGVECTOR_DSN", "").strip()
+        self._vector_store = PgVectorStore(self.pgvector_dsn) if self.pgvector_dsn else None
 
         self._embedding_model = None
         self._qa_pipeline = None
@@ -48,7 +52,13 @@ class RagEngine:
             lowercase=True,
         )
 
-    def ingest_document(self, document_id: str, file_storage) -> Dict[str, Any]:
+    def ingest_document(
+        self,
+        document_id: str,
+        file_storage,
+        owner_id: str | None = None,
+        department_id: str | None = None,
+    ) -> Dict[str, Any]:
         filename = file_storage.filename or "document"
         raw_bytes = file_storage.read()
 
@@ -61,21 +71,31 @@ class RagEngine:
         embeddings = self._embed_texts(texts)
         document_profile = self._build_document_profile(chunks)
 
-        index_payload = {
-            "documentId": document_id,
-            "filename": filename,
-            "chunkCount": len(chunks),
-            "chunks": chunks,
-            "embeddings": embeddings.tolist(),
-            "documentProfile": document_profile,
-        }
-
-        index_path = self._index_path(document_id)
-        # Yeniden indeksleme sırasında yarım yazılmış bir JSON'un canlı indeksi
-        # bozmasını engellemek için dosyayı atomik olarak değiştir.
-        temporary_index_path = index_path.with_suffix(".tmp")
-        temporary_index_path.write_text(json.dumps(index_payload, ensure_ascii=False), encoding="utf-8")
-        temporary_index_path.replace(index_path)
+        if self._vector_store is not None:
+            self._vector_store.replace_document(
+                document_id=document_id,
+                filename=filename,
+                owner_id=owner_id,
+                department_id=department_id,
+                chunks=chunks,
+                embeddings=embeddings,
+                profile=document_profile,
+            )
+        else:
+            # PGVECTOR_DSN ayarlanmamış yerel geliştirme ortamları için eski
+            # dosya tabanlı indeks yalnızca uyumluluk fallback'i olarak kalır.
+            index_payload = {
+                "documentId": document_id,
+                "filename": filename,
+                "chunkCount": len(chunks),
+                "chunks": chunks,
+                "embeddings": embeddings.tolist(),
+                "documentProfile": document_profile,
+            }
+            index_path = self._index_path(document_id)
+            temporary_index_path = index_path.with_suffix(".tmp")
+            temporary_index_path.write_text(json.dumps(index_payload, ensure_ascii=False), encoding="utf-8")
+            temporary_index_path.replace(index_path)
 
         return {
             "documentId": document_id,
@@ -84,6 +104,17 @@ class RagEngine:
         }
 
     def answer_question(self, document_id: str, question: str, top_k: int = 4) -> Dict[str, Any]:
+        started_at = time.perf_counter()
+        if self._vector_store is not None:
+            document_profile = self._vector_store.get_profile(document_id)
+            if document_profile is not None:
+                return self._answer_question_from_pgvector(
+                    document_id=document_id,
+                    question=question,
+                    top_k=top_k,
+                    document_profile=document_profile,
+                )
+
         index = self._load_index(document_id)
         chunks = index["chunks"]
         embeddings = np.array(index["embeddings"], dtype=np.float32)
@@ -104,10 +135,48 @@ class RagEngine:
                 for idx in top_indices
             ]
 
-        answer = self._build_answer(question, selected_sources, document_profile)
+        answer, generation = self._build_answer_result(question, selected_sources, document_profile)
         return {
             "answer": answer,
             "sources": selected_sources,
+            "trace": self._build_trace(
+                generation=generation,
+                selected_sources=selected_sources,
+                duration_ms=(time.perf_counter() - started_at) * 1000,
+            ),
+        }
+
+    def delete_document(self, document_id: str) -> None:
+        """Vektör verisini, ana belge silinmeden önce güvenli biçimde kaldırır."""
+        if self._vector_store is not None:
+            self._vector_store.delete_document(document_id)
+            return
+        self._index_path(document_id).unlink(missing_ok=True)
+
+    def _answer_question_from_pgvector(
+        self,
+        document_id: str,
+        question: str,
+        top_k: int,
+        document_profile: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        started_at = time.perf_counter()
+        response_mode = self._classify_response_mode(question)
+        if response_mode == "summary":
+            selected_sources = self._vector_store.initial_chunks(document_id, top_k)
+        else:
+            question_embedding = self._embed_texts([question])[0]
+            selected_sources = self._vector_store.search(document_id, question_embedding, top_k)
+
+        answer, generation = self._build_answer_result(question, selected_sources, document_profile)
+        return {
+            "answer": answer,
+            "sources": selected_sources,
+            "trace": self._build_trace(
+                generation=generation,
+                selected_sources=selected_sources,
+                duration_ms=(time.perf_counter() - started_at) * 1000,
+            ),
         }
 
     def _extract_pages(self, filename: str, raw_bytes: bytes) -> List[Dict[str, Any]]:
@@ -235,29 +304,54 @@ class RagEngine:
         sources: List[Dict[str, Any]],
         document_profile: Dict[str, str],
     ) -> str:
+        answer, _ = self._build_answer_result(question, sources, document_profile)
+        return answer
+
+    def _build_answer_result(
+        self,
+        question: str,
+        sources: List[Dict[str, Any]],
+        document_profile: Dict[str, str],
+    ) -> tuple[str, Dict[str, Any]]:
         if not sources:
-            return "Bu belge içinde soruyla ilişkili bir bölüm bulunamadı."
+            return "Bu belge içinde soruyla ilişkili bir bölüm bulunamadı.", {
+                "provider": "retrieval",
+                "model": None,
+                "responseMode": self._classify_response_mode(question),
+                "prompt": None,
+            }
 
         response_mode = self._classify_response_mode(question)
-        generated_answer = self._answer_with_ollama(
+        generated_result = self._answer_with_ollama(
             question=question,
             sources=sources,
             document_profile=document_profile,
             response_mode=response_mode,
         )
-        if generated_answer:
-            return generated_answer
+        if generated_result:
+            return generated_result
 
         # Yerel LLM kapalıysa belge-genel sorular için QA modelinin rastgele bir
         # span seçmesine izin verme. Belge profili tüm ifade biçimlerinde aynı
         # güvenilir özeti sağlar.
         if response_mode == "summary" and document_profile.get("summary"):
-            return document_profile["summary"]
+            return document_profile["summary"], {
+                "provider": "document-profile",
+                "model": None,
+                "responseMode": response_mode,
+                "prompt": None,
+            }
 
         if response_mode == "critique":
             return (
                 "Belgeye dayalı değerlendirme üretmek için yerel LLM yanıt üretimi etkin olmalıdır. "
-                "İlgili kaynak parçaları aşağıda gösterilmiştir."
+                "İlgili kaynak parçaları aşağıda gösterilmiştir.",
+                {
+                    "provider": "critique-fallback",
+                    "model": None,
+                    "responseMode": response_mode,
+                    "prompt": None,
+                },
             )
 
         qa_pipeline = self._get_qa_pipeline()
@@ -276,12 +370,35 @@ class RagEngine:
                     continue
 
             if best_answer and best_score >= 0.02 and self._is_usable_qa_answer(best_answer):
-                return f"Belgeye göre: {best_answer}"
+                return f"Belgeye göre: {best_answer}", {
+                    "provider": "huggingface-qa",
+                    "model": self.qa_model_name,
+                    "responseMode": response_mode,
+                    "prompt": None,
+                }
 
         # Model kullanılamadığında ham 900 karakterlik chunk döndürmek yerine,
         # soruyla en fazla kesişen kısa cümleleri seç.
         short_text = self._extract_relevant_passage(question, sources[0]["text"])
-        return f"Belgeye göre: {short_text}"
+        return f"Belgeye göre: {short_text}", {
+            "provider": "extractive-fallback",
+            "model": None,
+            "responseMode": response_mode,
+            "prompt": None,
+        }
+
+    def _build_trace(
+        self,
+        generation: Dict[str, Any],
+        selected_sources: List[Dict[str, Any]],
+        duration_ms: float,
+    ) -> Dict[str, Any]:
+        """İstek başına bağımsız, saklanabilir RAG/LLM iz verisi üretir."""
+        return {
+            **generation,
+            "durationMs": max(0, round(duration_ms)),
+            "retrievedChunks": selected_sources,
+        }
 
     def _source_from_chunk(self, chunk: Dict[str, Any], score: float) -> Dict[str, Any]:
         return {
@@ -413,7 +530,7 @@ class RagEngine:
         sources: List[Dict[str, Any]],
         document_profile: Dict[str, str],
         response_mode: str,
-    ) -> str | None:
+    ) -> tuple[str, Dict[str, Any]] | None:
         """Yapılandırılmışsa kaynaklarla sınırlı bir Ollama cevabı üretir."""
         if not self.ollama_base_url or not self.ollama_model:
             return None
@@ -480,8 +597,20 @@ CEVAP:"""
                 result = json.loads(response.read().decode("utf-8"))
             answer = self._sanitize_generated_answer(str(result.get("response", "")))
             if response_mode == "critique" and not self._is_grounded_critique(answer, sources):
-                return self._safe_critique_answer()
-            return answer or None
+                return self._safe_critique_answer(), {
+                    "provider": "ollama-safety-guard",
+                    "model": self.ollama_model,
+                    "responseMode": response_mode,
+                    "prompt": prompt,
+                }
+            if answer:
+                return answer, {
+                    "provider": "ollama",
+                    "model": self.ollama_model,
+                    "responseMode": response_mode,
+                    "prompt": prompt,
+                }
+            return None
         except (urllib.error.URLError, TimeoutError, ValueError) as exc:
             print(f"Ollama cevabı alınamadı, QA fallback kullanılacak: {exc}")
             return None

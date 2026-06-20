@@ -17,6 +17,8 @@ export default function Register() {
       localStorage.setItem('token', data.token)
       localStorage.setItem('name', data.name)
       localStorage.setItem('email', data.email)
+      localStorage.setItem('userId', data.userId)
+      localStorage.setItem('role', data.role)
       navigate('/')
     } catch (err) {
       setError(getErrorMessage(err))

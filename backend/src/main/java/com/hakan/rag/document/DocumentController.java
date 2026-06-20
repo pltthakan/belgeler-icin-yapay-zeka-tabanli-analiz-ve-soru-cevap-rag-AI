@@ -1,10 +1,14 @@
 package com.hakan.rag.document;
 
 import com.hakan.rag.chat.ChatMessageRepository;
+import com.hakan.rag.audit.AuditAction;
+import com.hakan.rag.audit.AuditLogService;
 import com.hakan.rag.document.dto.AiIngestResponse;
 import com.hakan.rag.document.dto.DocumentResponse;
+import com.hakan.rag.document.dto.DocumentSharingRequest;
 import com.hakan.rag.user.User;
 import com.hakan.rag.util.CurrentUserService;
+import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.HttpEntity;
@@ -24,6 +28,7 @@ import java.nio.file.Paths;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/documents")
@@ -32,6 +37,8 @@ public class DocumentController {
     private final DocumentRepository documentRepository;
     private final ChatMessageRepository chatMessageRepository;
     private final CurrentUserService currentUserService;
+    private final DocumentAccessService documentAccessService;
+    private final AuditLogService auditLogService;
     private final RestTemplate restTemplate;
 
     @Value("${app.upload-dir}")
@@ -43,10 +50,14 @@ public class DocumentController {
     public DocumentController(DocumentRepository documentRepository,
                               ChatMessageRepository chatMessageRepository,
                               CurrentUserService currentUserService,
+                              DocumentAccessService documentAccessService,
+                              AuditLogService auditLogService,
                               RestTemplate restTemplate) {
         this.documentRepository = documentRepository;
         this.chatMessageRepository = chatMessageRepository;
         this.currentUserService = currentUserService;
+        this.documentAccessService = documentAccessService;
+        this.auditLogService = auditLogService;
         this.restTemplate = restTemplate;
     }
 
@@ -65,6 +76,8 @@ public class DocumentController {
 
         DocumentFile document = new DocumentFile();
         document.setOwner(user);
+        document.setDepartment(user.getDepartment());
+        document.setSharingScope(DocumentSharingScope.PRIVATE);
         document.setOriginalFilename(file.getOriginalFilename());
         document.setContentType(file.getContentType());
         document.setFileSize(file.getSize());
@@ -73,7 +86,7 @@ public class DocumentController {
         documentRepository.save(document);
 
         try {
-            AiIngestResponse aiResponse = sendFileToAiService(document.getId(), file);
+            AiIngestResponse aiResponse = sendFileToAiService(document, file);
             document.setStatus(DocumentStatus.READY);
             document.setChunkCount(aiResponse.chunkCount());
             document.setErrorMessage(null);
@@ -83,32 +96,36 @@ public class DocumentController {
         }
 
         documentRepository.save(document);
+        auditLogService.record(user, AuditAction.DOCUMENT_UPLOADED, document.getId(), Map.of(
+                "status", document.getStatus().name(),
+                "filename", document.getOriginalFilename()
+        ));
         return ResponseEntity.ok(DocumentResponse.from(document));
     }
 
     @GetMapping
     public ResponseEntity<List<DocumentResponse>> list() {
         User user = currentUserService.getCurrentUser();
-        List<DocumentResponse> documents = documentRepository.findByOwnerOrderByCreatedAtDesc(user)
+        List<DocumentResponse> documents = documentAccessService.listAccessibleDocuments(user)
                 .stream()
                 .map(DocumentResponse::from)
                 .toList();
+        auditLogService.record(user, AuditAction.DOCUMENT_LISTED, null, Map.of("count", documents.size()));
         return ResponseEntity.ok(documents);
     }
 
     @GetMapping("/{id}")
     public ResponseEntity<DocumentResponse> get(@PathVariable Long id) {
         User user = currentUserService.getCurrentUser();
-        DocumentFile document = documentRepository.findByIdAndOwner(id, user)
-                .orElseThrow(() -> new IllegalArgumentException("Belge bulunamadı."));
+        DocumentFile document = documentAccessService.getAccessibleDocument(id, user);
+        auditLogService.record(user, AuditAction.DOCUMENT_VIEWED, document.getId(), Map.of());
         return ResponseEntity.ok(DocumentResponse.from(document));
     }
 
     @PostMapping("/{id}/reindex")
     public ResponseEntity<DocumentResponse> reindex(@PathVariable Long id) throws Exception {
         User user = currentUserService.getCurrentUser();
-        DocumentFile document = documentRepository.findByIdAndOwner(id, user)
-                .orElseThrow(() -> new IllegalArgumentException("Belge bulunamadı."));
+        DocumentFile document = documentAccessService.getReindexableDocument(id, user);
 
         DocumentStatus previousStatus = document.getStatus();
         document.setStatus(DocumentStatus.PROCESSING);
@@ -128,6 +145,10 @@ public class DocumentController {
         }
 
         documentRepository.save(document);
+        auditLogService.record(user, AuditAction.DOCUMENT_REINDEXED, document.getId(), Map.of(
+                "status", document.getStatus().name(),
+                "chunkCount", String.valueOf(document.getChunkCount())
+        ));
         return ResponseEntity.ok(DocumentResponse.from(document));
     }
 
@@ -135,15 +156,37 @@ public class DocumentController {
     @Transactional
     public ResponseEntity<Void> delete(@PathVariable Long id) {
         User user = currentUserService.getCurrentUser();
-        DocumentFile document = documentRepository.findByIdAndOwner(id, user)
-                .orElseThrow(() -> new IllegalArgumentException("Belge bulunamadı."));
+        DocumentFile document = documentAccessService.getManageableDocument(id, user);
+        deleteAiIndex(document.getId());
+        auditLogService.record(user, AuditAction.DOCUMENT_DELETED, document.getId(), Map.of(
+                "filename", document.getOriginalFilename()
+        ));
         chatMessageRepository.deleteByDocument(document);
         documentRepository.delete(document);
         return ResponseEntity.noContent().build();
     }
 
-    private AiIngestResponse sendFileToAiService(Long documentId, MultipartFile file) throws Exception {
-        return sendBytesToAiService(documentId, file.getBytes(), file.getOriginalFilename());
+    @PutMapping("/{id}/sharing")
+    public ResponseEntity<DocumentResponse> updateSharing(
+            @PathVariable Long id,
+            @Valid @RequestBody DocumentSharingRequest request
+    ) {
+        User user = currentUserService.getCurrentUser();
+        DocumentFile document = documentAccessService.getManageableDocument(id, user);
+        if (request.sharingScope() == DocumentSharingScope.DEPARTMENT && document.getDepartment() == null) {
+            throw new IllegalArgumentException("Departman paylaşımı için belge sahibinin bir departmanı olmalıdır.");
+        }
+        document.setSharingScope(request.sharingScope());
+        documentRepository.save(document);
+        auditLogService.record(user, AuditAction.DOCUMENT_SHARED, document.getId(), Map.of(
+                "sharingScope", document.getSharingScope().name(),
+                "departmentId", String.valueOf(document.getDepartment() == null ? null : document.getDepartment().getId())
+        ));
+        return ResponseEntity.ok(DocumentResponse.from(document));
+    }
+
+    private AiIngestResponse sendFileToAiService(DocumentFile document, MultipartFile file) throws Exception {
+        return sendBytesToAiService(document, file.getBytes(), file.getOriginalFilename());
     }
 
     private AiIngestResponse sendStoredFileToAiService(DocumentFile document) throws Exception {
@@ -155,10 +198,10 @@ public class DocumentController {
         if (!Files.isRegularFile(path)) {
             throw new IllegalStateException("Belgenin saklanan dosyası bulunamadı.");
         }
-        return sendBytesToAiService(document.getId(), Files.readAllBytes(path), document.getOriginalFilename());
+        return sendBytesToAiService(document, Files.readAllBytes(path), document.getOriginalFilename());
     }
 
-    private AiIngestResponse sendBytesToAiService(Long documentId, byte[] bytes, String filename) {
+    private AiIngestResponse sendBytesToAiService(DocumentFile document, byte[] bytes, String filename) {
         ByteArrayResource fileResource = new ByteArrayResource(bytes) {
             @Override
             public String getFilename() {
@@ -167,7 +210,11 @@ public class DocumentController {
         };
 
         MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
-        body.add("documentId", documentId.toString());
+        body.add("documentId", document.getId().toString());
+        body.add("ownerId", document.getOwner().getId().toString());
+        if (document.getDepartment() != null) {
+            body.add("departmentId", document.getDepartment().getId().toString());
+        }
         body.add("file", fileResource);
 
         HttpHeaders headers = new HttpHeaders();
@@ -184,6 +231,16 @@ public class DocumentController {
             throw new IllegalStateException("AI servisi belgeyi işleyemedi.");
         }
         return response.getBody();
+    }
+
+    private void deleteAiIndex(Long documentId) {
+        try {
+            restTemplate.delete(aiBaseUrl + "/api/index/{documentId}", documentId.toString());
+        } catch (Exception exception) {
+            // Belge silme, kaynak embedding'ler de silinmeden tamamlanmaz. Bu,
+            // gizli belge içeriğinin vektör deposunda yetimsiz kalmasını engeller.
+            throw new IllegalStateException("Belgenin AI indeksi silinemedi: " + exception.getMessage());
+        }
     }
 
     private void validateFile(MultipartFile file) {
