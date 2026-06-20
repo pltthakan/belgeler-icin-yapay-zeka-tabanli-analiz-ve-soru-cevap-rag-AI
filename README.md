@@ -64,15 +64,15 @@ Varsayılan açık kaynak modeller:
 Varsayılan akış, soru-cevap modelini kullanır; bu model metinden cevap parçası çıkarır. `Ana konusu nedir?` gibi belgeyi bütün olarak yorumlamayı gerektiren sorularda sistem doğrudan belge başlığını kullanır. Daha doğal, kısa cevaplar için yerel bir Ollama modeli eklenebilir:
 
 ```bash
-ollama pull qwen2.5:7b
+ollama pull qwen3:8b
 ```
 
 Docker Desktop üzerinde proje kökünde `.env` dosyasına aşağıdakileri ekleyip servisleri yeniden oluşturun:
 
 ```text
 OLLAMA_BASE_URL=http://host.docker.internal:11434
-OLLAMA_MODEL=qwen2.5:7b
-OLLAMA_TIMEOUT_SECONDS=30
+OLLAMA_MODEL=qwen3:8b
+OLLAMA_TIMEOUT_SECONDS=60
 ```
 
 ```bash
@@ -82,6 +82,26 @@ docker compose up --build -d
 Ollama kapalıysa veya erişilemezse uygulama hata vermez. Belge-genel sorular, yükleme sırasında çıkarılan belge profiliyle; ayrıntılı sorular ise QA ve kısa, belgeye bağlı extractive fallback ile cevaplanır.
 
 Mevcut bir belgenin DOCX tablo çıkarımı ve yeni indeksleme kurallarından yararlanması için ana ekrandaki **Yeniden indeksle** düğmesini kullanın. Başarısız bir yeniden indeksleme, önceki başarılı indeksi silmez.
+
+### Cevap türleri ve kalite değerlendirmesi
+
+Soru türü otomatik olarak sınıflandırılır:
+
+- **Bilgi sorusu:** Belgedeki doğrudan bilgiyi verir.
+- **Özet sorusu:** Belgenin türünü, amacını ve ana konusunu özetler.
+- **Değerlendirme sorusu:** “Sence”, “eksikleri neler?”, “nasıl iyileşir?” gibi sorularda belgeye dayalı çıkarım yapar; çıkarımı kesin belge bilgisi gibi sunmaz.
+
+`ai-service/evaluation/cases.json`, kişisel veri içermeyen sentetik regresyon vakalarını içerir. Retrieval ve cevap davranışını kontrol etmek için:
+
+```bash
+docker compose exec ai-service python evaluation/run_evaluation.py
+```
+
+Aktif Ollama modeliyle cevap üretimini de test etmek için:
+
+```bash
+docker compose exec ai-service python evaluation/run_evaluation.py --with-ollama
+```
 
 ## IDE önerisi
 
