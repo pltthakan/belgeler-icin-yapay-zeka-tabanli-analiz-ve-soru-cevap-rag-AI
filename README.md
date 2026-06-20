@@ -7,10 +7,10 @@ Bu proje şu akışı gerçekleştirir:
 1. Kullanıcı sisteme kayıt olur / giriş yapar.
 2. PDF, DOCX veya TXT belge yükler.
 3. Spring Boot backend belgeyi kaydeder ve Flask AI servisine gönderir.
-4. Flask servisi PDF/DOCX/TXT metnini (DOCX tabloları dahil) çıkarır, belge profilini oluşturur, chunk'lara böler, açık kaynak embedding modeliyle vektörleştirir ve lokal vektör indeksine kaydeder.
+4. Flask servisi PDF/DOCX/TXT metnini (DOCX tabloları dahil) çıkarır, belge profilini oluşturur, chunk'lara böler, açık kaynak embedding modeliyle vektörleştirir ve PostgreSQL içindeki pgvector indeksine kaydeder.
 5. Kullanıcı belge hakkında soru sorar.
 6. Flask servisi soru türüne göre belge profilini veya en alakalı kaynak parçalarını seçer; yapılandırılmışsa yerel LLM ile, değilse QA/extractive fallback ile belgeye dayalı cevap üretir.
-7. Spring Boot cevabı ve kaynakları chat geçmişine kaydeder.
+7. Spring Boot cevabı ve kaynakları chat geçmişine; seçilen chunk’ları, prompt’u, model cevabını, süreyi ve hatayı LLM çalışma izine kaydeder.
 8. React arayüz cevapları ve kaynak parçaları gösterir.
 
 ## Mimari
@@ -24,7 +24,7 @@ Python Flask AI Service
       ↓
 Open-source Embedding + QA Models
       ↓
-Local Persistent Vector Index
+PostgreSQL + pgvector
 ```
 
 ## Kullanılan teknolojiler
@@ -41,6 +41,7 @@ Local Persistent Vector Index
 - Spring Security JWT
 - Spring Data JPA
 - PostgreSQL
+- pgvector (HNSW cosine-similarity araması)
 - Maven
 
 ### AI Service
@@ -82,6 +83,24 @@ docker compose up --build -d
 Ollama kapalıysa veya erişilemezse uygulama hata vermez. Belge-genel sorular, yükleme sırasında çıkarılan belge profiliyle; ayrıntılı sorular ise QA ve kısa, belgeye bağlı extractive fallback ile cevaplanır.
 
 Mevcut bir belgenin DOCX tablo çıkarımı ve yeni indeksleme kurallarından yararlanması için ana ekrandaki **Yeniden indeksle** düğmesini kullanın. Başarısız bir yeniden indeksleme, önceki başarılı indeksi silmez.
+
+### pgvector indeksi
+
+Docker Compose, PostgreSQL 16 ile uyumlu `pgvector/pgvector:0.8.2-pg16` imajını kullanır. AI servisinin `PGVECTOR_DSN` bağlantısı varsayılan olarak Compose içindeki PostgreSQL’e bağlıdır. Yüklenen veya **Yeniden indeksle** ile tekrar işlenen her belge için belge profili `rag_document_profiles` tablosuna; chunk metni ve embedding ise `rag_document_chunks` tablosuna yazılır. HNSW indeks, cosine similarity ile en yakın kaynak parçalarını seçer.
+
+Eski JSON indeksleri, daha önce indekslenmiş belgeleri bozmamak için yalnızca geçici uyumluluk fallback’i olarak okunabilir; kalıcı indeksleme hedefi pgvector’dır.
+
+### Roller, departman erişimi ve audit log
+
+Roller `EMPLOYEE`, `MANAGER` ve `ADMIN` olarak tanımlıdır. Her yeni belge varsayılan olarak **özel** oluşturulur. Belge sahibi veya admin belgeyi **departmanla paylaşabilir**; aynı departmandaki kullanıcılar belgeyi görüntüleyip soru sorabilir. Departman yöneticisi (`MANAGER`) yalnızca kendi departmanıyla paylaşılmış belgeyi yeniden indeksleyebilir; silme ve paylaşım ayarı belge sahibi veya `ADMIN` ile sınırlıdır.
+
+Yönetici hesabını başlatmak için proje kökündeki yerel `.env` dosyasına mevcut kayıtlı e-posta adresini bir kez yazıp backend’i yeniden başlatın:
+
+```text
+APP_BOOTSTRAP_ADMIN_EMAIL=you@example.com
+```
+
+Ardından giriş yapıp üst menüdeki **Yönetim** sayfasından departman oluşturabilir, kullanıcıların rol/departmanını atayabilir, son 100 audit kaydını ve LLM/RAG izini inceleyebilirsiniz. Prompt ve seçilen kaynak parçaları belge verisi içerebileceğinden bu ekran yalnızca `ADMIN` rolüne açıktır.
 
 ### Cevap türleri ve kalite değerlendirmesi
 
@@ -194,6 +213,7 @@ POST /api/documents/upload
 GET  /api/documents
 GET  /api/documents/{id}
 POST /api/documents/{id}/reindex
+PUT  /api/documents/{id}/sharing
 DELETE /api/documents/{id}
 ```
 
@@ -202,6 +222,17 @@ DELETE /api/documents/{id}
 ```text
 POST /api/chat/documents/{documentId}/ask
 GET  /api/chat/documents/{documentId}/history
+```
+
+### Admin
+
+```text
+POST /api/admin/departments
+GET  /api/admin/departments
+GET  /api/admin/users
+PUT  /api/admin/users/{userId}/access
+GET  /api/admin/audit-logs?documentId={optional}
+GET  /api/admin/llm-traces?documentId={optional}
 ```
 
 ## Demo kullanım
@@ -238,11 +269,11 @@ private-document-rag-ai/
 
 - React, Spring Boot ve Python Flask kullanarak özel PDF/DOCX/TXT belgeleri üzerinde çalışan RAG tabanlı soru-cevap platformu geliştirdim.
 - Belge yükleme, metin çıkarma, chunking, embedding üretimi, vektör benzerlik araması ve kaynaklı cevap üretimi süreçlerini uçtan uca tasarladım.
-- Spring Security JWT ile kullanıcı bazlı belge erişim kontrolü sağladım; PostgreSQL üzerinde kullanıcı, belge ve chat geçmişi kayıtlarını yönettim.
+- Spring Security JWT ile rol/departman bazlı belge erişim kontrolü sağladım; PostgreSQL üzerinde kullanıcı, belge, chat geçmişi, audit log ve LLM trace kayıtlarını yönettim.
+- JSON yerine pgvector üzerinde HNSW vektör araması, yeniden indeksleme ve kaynak bazlı RAG gözlemlenebilirliği kurdum.
 - Açık kaynak sentence-transformers ve transformers modelleriyle OpenAI API kullanmadan belgeye dayalı cevap üretim akışı oluşturdum.
 
 ## Önemli notlar
 
-- Bu proje MVP seviyesinde tamamlanmış çalışır bir temel sistemdir.
-- Büyük dosyalar ve çok yüksek trafik için production ortamında queue sistemi, object storage, pgvector/ChromaDB/Qdrant ve async processing eklenmesi önerilir.
-- Hassas belgeler için production ortamında dosya şifreleme, audit log ve daha detaylı yetki modeli eklenmelidir.
+- Bu proje çalışır bir RAG temelidir; production geçişinde migration aracı (Flyway/Liquibase), object storage, şifreleme, merkezi loglama ve retention politikası eklenmelidir.
+- Büyük dosyalar ve yüksek trafik için indeksleme kuyruğa alınmalı; object storage ve asenkron worker yapısı kullanılmalıdır.

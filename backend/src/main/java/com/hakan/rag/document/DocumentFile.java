@@ -1,5 +1,6 @@
 package com.hakan.rag.document;
 
+import com.hakan.rag.department.Department;
 import com.hakan.rag.user.User;
 import jakarta.persistence.*;
 
@@ -14,6 +15,12 @@ public class DocumentFile {
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     private User owner;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    private Department department;
+
+    @Enumerated(EnumType.STRING)
+    private DocumentSharingScope sharingScope = DocumentSharingScope.PRIVATE;
 
     @Column(nullable = false)
     private String originalFilename;
@@ -63,6 +70,22 @@ public class DocumentFile {
 
     public void setOwner(User owner) {
         this.owner = owner;
+    }
+
+    public Department getDepartment() {
+        return department;
+    }
+
+    public void setDepartment(Department department) {
+        this.department = department;
+    }
+
+    public DocumentSharingScope getSharingScope() {
+        return sharingScope == null ? DocumentSharingScope.PRIVATE : sharingScope;
+    }
+
+    public void setSharingScope(DocumentSharingScope sharingScope) {
+        this.sharingScope = sharingScope;
     }
 
     public String getOriginalFilename() {

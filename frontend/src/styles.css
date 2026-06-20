@@ -63,6 +63,14 @@ input {
   background: white;
 }
 
+select {
+  border: 1px solid #d7def0;
+  border-radius: 8px;
+  padding: 8px;
+  background: white;
+  color: #162033;
+}
+
 label {
   font-weight: 700;
   margin-top: 12px;
@@ -197,6 +205,51 @@ label {
 .doc-card h3 {
   margin: 0;
   word-break: break-word;
+}
+
+.sharing-badge {
+  align-self: flex-start;
+  color: #2455aa;
+  background: #eaf2ff;
+  border-radius: 999px;
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.inline-form {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.inline-form input { flex: 1; }
+
+.table-scroll { overflow-x: auto; }
+
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 12px; border-bottom: 1px solid #e6eaf3; vertical-align: top; }
+
+.log-list { display: grid; gap: 8px; }
+
+.log-entry {
+  border: 1px solid #e6eaf3;
+  border-radius: 10px;
+  padding: 10px 12px;
+  overflow: hidden;
+}
+
+.log-entry summary { cursor: pointer; }
+
+pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 320px;
+  overflow-y: auto;
+  background: #f7f9fd;
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 12px;
 }
 
 .badge {

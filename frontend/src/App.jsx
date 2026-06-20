@@ -3,11 +3,13 @@ import Dashboard from './pages/Dashboard.jsx'
 import Login from './pages/Login.jsx'
 import Register from './pages/Register.jsx'
 import Chat from './pages/Chat.jsx'
+import Admin from './pages/Admin.jsx'
 
 function Layout({ children }) {
   const navigate = useNavigate()
   const token = localStorage.getItem('token')
   const userName = localStorage.getItem('name')
+  const role = localStorage.getItem('role')
 
   const logout = () => {
     localStorage.clear()
@@ -22,6 +24,7 @@ function Layout({ children }) {
           {token ? (
             <>
               <span className="user">{userName}</span>
+              {role === 'ADMIN' && <Link to="/admin">Yönetim</Link>}
               <button className="ghost" onClick={logout}>Çıkış</button>
             </>
           ) : (
@@ -43,6 +46,11 @@ function PrivateRoute({ children }) {
   return children
 }
 
+function AdminRoute({ children }) {
+  if (localStorage.getItem('role') !== 'ADMIN') return <Navigate to="/" replace />
+  return children
+}
+
 export default function App() {
   return (
     <Layout>
@@ -51,6 +59,7 @@ export default function App() {
         <Route path="/register" element={<Register />} />
         <Route path="/" element={<PrivateRoute><Dashboard /></PrivateRoute>} />
         <Route path="/documents/:id/chat" element={<PrivateRoute><Chat /></PrivateRoute>} />
+        <Route path="/admin" element={<PrivateRoute><AdminRoute><Admin /></AdminRoute></PrivateRoute>} />
       </Routes>
     </Layout>
   )

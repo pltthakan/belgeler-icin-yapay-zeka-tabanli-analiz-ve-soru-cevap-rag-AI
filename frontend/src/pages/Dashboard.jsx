@@ -9,6 +9,10 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [reindexingId, setReindexingId] = useState(null)
+  const [sharingId, setSharingId] = useState(null)
+  const currentUserId = localStorage.getItem('userId')
+  const isAdmin = localStorage.getItem('role') === 'ADMIN'
+  const isManager = localStorage.getItem('role') === 'MANAGER'
 
   const loadDocuments = async () => {
     setLoading(true)
@@ -73,6 +77,20 @@ export default function Dashboard() {
     }
   }
 
+  const toggleSharing = async (doc) => {
+    setSharingId(doc.id)
+    setError('')
+    const sharingScope = doc.sharingScope === 'DEPARTMENT' ? 'PRIVATE' : 'DEPARTMENT'
+    try {
+      await api.put(`/api/documents/${doc.id}/sharing`, { sharingScope })
+      await loadDocuments()
+    } catch (err) {
+      setError(getErrorMessage(err))
+    } finally {
+      setSharingId(null)
+    }
+  }
+
   return (
     <div>
       <section className="hero">
@@ -101,6 +119,7 @@ export default function Dashboard() {
         <div className="doc-grid">
           {documents.map((doc) => (
             <article className="doc-card" key={doc.id}>
+              {doc.sharingScope === 'DEPARTMENT' && <span className="sharing-badge">Departmanla paylaşılıyor</span>}
               <div>
                 <h3>{doc.originalFilename}</h3>
                 <p className="muted">Chunk: {doc.chunkCount ?? '-'} · Boyut: {formatBytes(doc.fileSize)}</p>
@@ -109,10 +128,13 @@ export default function Dashboard() {
               {doc.errorMessage && <p className="error-text">{doc.errorMessage}</p>}
               <div className="card-actions">
                 <Link className={doc.status === 'READY' ? 'button-link' : 'button-link disabled'} to={doc.status === 'READY' ? `/documents/${doc.id}/chat` : '#'}>Sohbet</Link>
-                <button className="ghost" disabled={doc.status !== 'READY' || reindexingId === doc.id} onClick={() => reindex(doc.id)}>
+                {(isAdmin || isManager || String(doc.ownerId) === currentUserId) && <button className="ghost" disabled={doc.status !== 'READY' || reindexingId === doc.id} onClick={() => reindex(doc.id)}>
                   {reindexingId === doc.id ? 'İndeksleniyor...' : 'Yeniden indeksle'}
-                </button>
-                <button className="danger" onClick={() => remove(doc.id)}>Sil</button>
+                </button>}
+                {(isAdmin || String(doc.ownerId) === currentUserId) && <button className="ghost" disabled={sharingId === doc.id} onClick={() => toggleSharing(doc)}>
+                  {sharingId === doc.id ? 'Kaydediliyor...' : doc.sharingScope === 'DEPARTMENT' ? 'Özel yap' : 'Departmanla paylaş'}
+                </button>}
+                {(isAdmin || String(doc.ownerId) === currentUserId) && <button className="danger" onClick={() => remove(doc.id)}>Sil</button>}
               </div>
             </article>
           ))}
