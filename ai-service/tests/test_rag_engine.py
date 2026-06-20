@@ -61,6 +61,21 @@ class RagEngineAnswerTests(unittest.TestCase):
         self.assertTrue(self.engine._is_document_overview_question("Belge ne hakkında?"))
         self.assertTrue(self.engine._is_document_overview_question("Bu belgede ne anlatılıyor?"))
 
+    def test_response_mode_distinguishes_summary_critique_and_factual_questions(self):
+        self.assertEqual(self.engine._classify_response_mode("Bu belgeyi özetle."), "summary")
+        self.assertEqual(self.engine._classify_response_mode("Bu CV'nin eksikleri neler?"), "critique")
+        self.assertEqual(self.engine._classify_response_mode("Ödeme süresi kaç gün?"), "factual")
+
+    def test_critique_fallback_does_not_present_an_inference_as_a_fact(self):
+        answer = self.engine._build_answer(
+            "Bu CV'nin eksikleri neler?",
+            [{"text": "Adayın Java ve React projeleri bulunuyor."}],
+            {"title": "Aday CV'si", "summary": "Adayın teknik projelerini içeren CV."},
+        )
+
+        self.assertIn("yerel LLM", answer)
+        self.assertNotIn("negatif taraf", answer.lower())
+
     def test_extractive_fallback_returns_relevant_sentences_only(self):
         passage = self.engine._extract_relevant_passage(
             "Ödenen ücrette memnun musunuz?",
@@ -74,6 +89,29 @@ class RagEngineAnswerTests(unittest.TestCase):
         self.assertFalse(self.engine._is_usable_qa_answer(" "))
         self.assertTrue(self.engine._is_usable_qa_answer("30"))
         self.assertTrue(self.engine._is_usable_qa_answer("Öğrencilerin hakları"))
+
+    def test_generated_answer_sanitizer_removes_answer_and_source_labels(self):
+        answer = self.engine._sanitize_generated_answer(
+            "Cevap: Adayın backend deneyimi öne çıkıyor. Kaynak 1 ve 2'de projeler yer alıyor."
+        )
+
+        self.assertEqual(answer, "Adayın backend deneyimi öne çıkıyor.")
+
+    def test_critique_guard_rejects_claims_contradicted_by_sources(self):
+        sources = [{
+            "text": (
+                "EXPERIENCE\nSoftware Developer Intern\nFeb 2026 – Jun 2026\n"
+                "SKILLS\nJava, Spring Boot, Python, Flask, React\n"
+                "PROJECTS\nBuilt a financial dashboard and implemented REST APIs."
+            )
+        }]
+        unsupported = (
+            "Belgeye dayalı değerlendirme: deneyimlerin tarihlendirilmemiş olması, "
+            "teknik becerilerin eksik belirtilmesi ve proje açıklamalarının tamamlanmamış olması."
+        )
+
+        self.assertFalse(self.engine._is_grounded_critique(unsupported, sources))
+        self.assertTrue(self.engine._is_grounded_critique(self.engine._safe_critique_answer(), sources))
 
     def test_docx_extraction_includes_table_cells_in_document_order(self):
         document = Document()

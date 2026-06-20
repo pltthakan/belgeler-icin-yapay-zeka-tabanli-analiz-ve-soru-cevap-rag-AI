@@ -1,0 +1,52 @@
+{
+  "cases": [
+    {
+      "id": "candidate-tech-profile",
+      "question": "Adayın React ve Flask deneyimi nedir?",
+      "chunks": [
+        {
+          "pageNumber": 1,
+          "text": "ADAY PROFİLİ\nAday; React, Flask, Java ve PostgreSQL kullanarak web uygulamaları geliştirmiştir. API tasarımı ve backend geliştirme deneyimi bulunmaktadır."
+        },
+        {
+          "pageNumber": 1,
+          "text": "EĞİTİM\nBilgisayar mühendisliği lisans eğitimi tamamlanmıştır."
+        }
+      ],
+      "expectedSourceChunks": [0],
+      "requiredAnswerTerms": ["react", "flask"]
+    },
+    {
+      "id": "contract-notice-period",
+      "question": "Sözleşmenin fesih bildirim süresi kaç gündür?",
+      "chunks": [
+        {
+          "pageNumber": 1,
+          "text": "SÖZLEŞME ÖZETİ\nTaraflar hizmet kapsamı ve ödeme koşullarında mutabık kalmıştır."
+        },
+        {
+          "pageNumber": 2,
+          "text": "FESİH\nTaraflardan biri sözleşmeyi feshetmek isterse diğer tarafa en az 30 gün önce yazılı bildirim yapmalıdır."
+        }
+      ],
+      "expectedSourceChunks": [1],
+      "requiredAnswerTerms": ["30", "gün"]
+    },
+    {
+      "id": "support-procedure",
+      "question": "Destek personelinin sorumlulukları nelerdir?",
+      "chunks": [
+        {
+          "pageNumber": 1,
+          "text": "DESTEK PROSEDÜRÜ\nDestek personeli talepleri kayıt altına alır, önceliklendirir ve çözüm durumunu müşteriye bildirir."
+        },
+        {
+          "pageNumber": 2,
+          "text": "BİLGİ GÜVENLİĞİ\nMüşteri verileri yalnızca yetkili personel tarafından görüntülenebilir."
+        }
+      ],
+      "expectedSourceChunks": [0],
+      "requiredAnswerTerms": ["kayıt", "müşteri"]
+    }
+  ]
+}
