@@ -102,6 +102,18 @@ APP_BOOTSTRAP_ADMIN_EMAIL=you@example.com
 
 Ardından giriş yapıp üst menüdeki **Yönetim** sayfasından departman oluşturabilir, kullanıcıların rol/departmanını atayabilir, son 100 audit kaydını ve LLM/RAG izini inceleyebilirsiniz. Prompt ve seçilen kaynak parçaları belge verisi içerebileceğinden bu ekran yalnızca `ADMIN` rolüne açıktır.
 
+### Kalite paneli
+
+Yönetim ekranındaki **RAG kalite özeti**, tüm kayıtlı LLM çalışma izlerinden aşağıdaki metrikleri hesaplar:
+
+- Toplam AI isteği ve başarılı istek sayısı
+- Başarı oranı ve hata sayısı
+- Ortalama yanıt süresi
+- Ollama ile üretilen yanıtlar
+- QA, extractive ve retrieval fallback yanıtları
+
+Metrikler yalnızca `ADMIN` rolüne açıktır. Başarı oranı, hata kaydı olmayan LLM çağrılarının tüm çağrılara oranıdır; bu nedenle model cevabının içerik doğruluğunu değil, isteğin teknik olarak tamamlanmasını ölçer.
+
 ### Cevap türleri ve kalite değerlendirmesi
 
 Soru türü otomatik olarak sınıflandırılır:
@@ -233,6 +245,7 @@ GET  /api/admin/users
 PUT  /api/admin/users/{userId}/access
 GET  /api/admin/audit-logs?documentId={optional}
 GET  /api/admin/llm-traces?documentId={optional}
+GET  /api/admin/quality-summary
 ```
 
 ## Demo kullanım

@@ -103,6 +103,42 @@ public class AdminAccessController {
         return ResponseEntity.ok(traces.stream().map(LlmTraceResponse::from).toList());
     }
 
+    @GetMapping("/quality-summary")
+    public ResponseEntity<QualitySummaryResponse> qualitySummary() {
+        currentUserService.requireAdmin();
+        List<Object[]> metricRows = llmTraceRepository.qualityMetrics();
+        Object[] metrics = metricRows.isEmpty() ? new Object[] {0, 0, 0, 0, 0} : metricRows.get(0);
+        long totalRequests = longValue(metrics[0]);
+        long successfulRequests = longValue(metrics[1]);
+        long failedRequests = longValue(metrics[2]);
+        double averageResponseTimeMs = doubleValue(metrics[3]);
+        long ollamaResponses = longValue(metrics[4]);
+        long fallbackResponses = successfulRequests - ollamaResponses;
+        double successRate = totalRequests == 0 ? 0 : successfulRequests * 100.0 / totalRequests;
+
+        return ResponseEntity.ok(new QualitySummaryResponse(
+                totalRequests,
+                successfulRequests,
+                failedRequests,
+                roundOneDecimal(successRate),
+                roundOneDecimal(averageResponseTimeMs),
+                ollamaResponses,
+                fallbackResponses
+        ));
+    }
+
+    private static long longValue(Object value) {
+        return value instanceof Number number ? number.longValue() : 0;
+    }
+
+    private static double doubleValue(Object value) {
+        return value instanceof Number number ? number.doubleValue() : 0;
+    }
+
+    private static double roundOneDecimal(double value) {
+        return Math.round(value * 10.0) / 10.0;
+    }
+
     public record CreateDepartmentRequest(@NotBlank String name) {}
     public record UpdateUserAccessRequest(@NotNull UserRole role, Long departmentId) {}
     public record DepartmentResponse(Long id, String name) {
@@ -132,4 +168,7 @@ public class AdminAccessController {
                     trace.getRetrievedChunksJson(), trace.getAnswer(), trace.getError(), trace.getCreatedAt());
         }
     }
+    public record QualitySummaryResponse(long totalRequests, long successfulRequests, long failedRequests,
+                                         double successRate, double averageResponseTimeMs, long ollamaResponses,
+                                         long fallbackResponses) {}
 }

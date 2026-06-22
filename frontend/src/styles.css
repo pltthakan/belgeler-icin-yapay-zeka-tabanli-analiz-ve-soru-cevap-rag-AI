@@ -165,6 +165,43 @@ label {
   margin-bottom: 20px;
 }
 
+.quality-panel .section-title {
+  align-items: flex-start;
+}
+
+.quality-panel .section-title p {
+  margin: 0;
+}
+
+.quality-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.quality-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 130px;
+  padding: 16px;
+  border: 1px solid #dfe6f5;
+  border-radius: 14px;
+  background: linear-gradient(145deg, #f9fbff, #eef4ff);
+}
+
+.quality-label {
+  color: #53617a;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.quality-value {
+  color: #1b3f91;
+  font-size: 28px;
+  line-height: 1.2;
+}
+
 .upload-form {
   display: flex;
   gap: 12px;
@@ -382,6 +419,12 @@ pre {
   .upload-form,
   .ask-form {
     flex-direction: column;
+  }
+  .quality-panel .section-title {
+    gap: 12px;
+  }
+  .quality-panel .section-title button {
+    width: 100%;
   }
   .upload-form button,
   .ask-form button {

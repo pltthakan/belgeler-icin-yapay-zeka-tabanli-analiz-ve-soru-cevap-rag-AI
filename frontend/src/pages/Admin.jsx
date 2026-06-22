@@ -7,6 +7,7 @@ export default function Admin() {
   const [users, setUsers] = useState([])
   const [auditLogs, setAuditLogs] = useState([])
   const [traces, setTraces] = useState([])
+  const [qualitySummary, setQualitySummary] = useState(null)
   const [departmentName, setDepartmentName] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -15,16 +16,18 @@ export default function Admin() {
     setLoading(true)
     setError('')
     try {
-      const [departmentRes, userRes, auditRes, traceRes] = await Promise.all([
+      const [departmentRes, userRes, auditRes, traceRes, qualityRes] = await Promise.all([
         api.get('/api/admin/departments'),
         api.get('/api/admin/users'),
         api.get('/api/admin/audit-logs'),
-        api.get('/api/admin/llm-traces')
+        api.get('/api/admin/llm-traces'),
+        api.get('/api/admin/quality-summary')
       ])
       setDepartments(departmentRes.data)
       setUsers(userRes.data)
       setAuditLogs(auditRes.data)
       setTraces(traceRes.data)
+      setQualitySummary(qualityRes.data)
     } catch (err) {
       setError(getErrorMessage(err))
     } finally {
@@ -70,6 +73,25 @@ export default function Admin() {
       </section>
 
       {error && <div className="alert">{error}</div>}
+
+      <section className="panel quality-panel">
+        <div className="section-title">
+          <div>
+            <h2>RAG kalite özeti</h2>
+            <p className="muted">Tüm kayıtlı AI isteklerinden hesaplanır. Başarısız çağrılar hata kaydı içeren LLM trace’lerdir.</p>
+          </div>
+          <button className="secondary" onClick={load}>Yenile</button>
+        </div>
+        {loading || !qualitySummary ? <p>Kalite metrikleri yükleniyor...</p> : (
+          <div className="quality-grid">
+            <MetricCard label="Toplam AI isteği" value={formatCount(qualitySummary.totalRequests)} detail={`${formatCount(qualitySummary.successfulRequests)} başarılı`} />
+            <MetricCard label="Başarı oranı" value={`%${formatMetric(qualitySummary.successRate)}`} detail={`${formatCount(qualitySummary.failedRequests)} hata`} />
+            <MetricCard label="Ort. yanıt süresi" value={`${formatMetric(qualitySummary.averageResponseTimeMs)} ms`} detail="Süre bilgisi olan kayıtlar" />
+            <MetricCard label="Ollama yanıtı" value={formatCount(qualitySummary.ollamaResponses)} detail="Yerel LLM ile üretilen" />
+            <MetricCard label="Fallback yanıtı" value={formatCount(qualitySummary.fallbackResponses)} detail="QA / extractive / retrieval" />
+          </div>
+        )}
+      </section>
 
       <section className="panel">
         <div className="section-title"><h2>Departmanlar</h2><button className="secondary" onClick={load}>Yenile</button></div>
@@ -132,6 +154,22 @@ export default function Admin() {
   )
 }
 
+function MetricCard({ label, value, detail }) {
+  return <article className="quality-card">
+    <span className="quality-label">{label}</span>
+    <strong className="quality-value">{value}</strong>
+    <span className="muted">{detail}</span>
+  </article>
+}
+
 function formatDate(value) {
   return value ? new Date(value).toLocaleString('tr-TR') : ''
+}
+
+function formatCount(value) {
+  return new Intl.NumberFormat('tr-TR').format(value || 0)
+}
+
+function formatMetric(value) {
+  return new Intl.NumberFormat('tr-TR', { maximumFractionDigits: 1 }).format(value || 0)
 }
