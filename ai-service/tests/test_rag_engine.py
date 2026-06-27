@@ -171,6 +171,44 @@ class RagEngineAnswerTests(unittest.TestCase):
 
         self.assertEqual(pages[0]["text"], "Başlık\nÖdeme süresi | 30 gün\nSon not")
 
+    def test_semantic_chunking_keeps_paragraph_boundaries(self):
+        pages = [{
+            "pageNumber": 1,
+            "text": (
+                "GİRİŞ\n"
+                "Bu bölüm sistemin amacını ve kapsamını açıklar. "
+                "Kullanıcıların belge yükleyip soru sorabildiğini belirtir.\n\n"
+                "YÖNTEM\n"
+                "Bu bölüm metin çıkarma, bölümleme ve arama adımlarını açıklar. "
+                "Kaynak parçalarının anlam bütünlüğü korunur.\n\n"
+                "SONUÇ\n"
+                "Bu bölüm sistemin belgeye dayalı cevap ürettiğini özetler. "
+                "Yanıtların kaynaklarla birlikte gösterildiğini ve alakasız soruların elendiğini belirtir."
+            ),
+        }]
+
+        chunks = self.engine._chunk_pages(pages, chunk_size=170, overlap=0)
+
+        self.assertEqual(len(chunks), 3)
+        self.assertTrue(chunks[0]["text"].startswith("GİRİŞ"))
+        self.assertTrue(chunks[1]["text"].startswith("YÖNTEM"))
+        self.assertTrue(chunks[2]["text"].startswith("SONUÇ"))
+        self.assertNotIn("YÖ", chunks[0]["text"][-10:])
+
+    def test_semantic_chunking_splits_large_blocks_on_word_boundaries(self):
+        long_paragraph = (
+            "Bu uzun bölüm birinci cümlede sistemin amacını detaylı biçimde anlatır. "
+            "İkinci cümle belge parçalarının cümle veya kelime sınırında bölünmesini bekler. "
+            "Üçüncü cümle karakter ortasında kesilmiş anlamsız parçalar oluşmamasını doğrular."
+        )
+
+        pieces = self.engine._split_oversized_block(long_paragraph, chunk_size=95)
+
+        self.assertGreater(len(pieces), 1)
+        self.assertTrue(all(len(piece) <= 95 for piece in pieces))
+        self.assertTrue(all(piece == piece.strip() for piece in pieces))
+        self.assertFalse(any(piece.endswith(" biç") for piece in pieces))
+
     def test_pdf_page_extraction_falls_back_when_pypdf_fails(self):
         class BrokenPage:
             def extract_text(self):
