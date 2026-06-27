@@ -1,15 +1,15 @@
 # Private Document RAG AI Platform
 
-Özel belgeler için açık kaynak model kullanan, React + Spring Boot + Python Flask tabanlı RAG soru-cevap platformu.
+Özel belgeler için açık kaynak model kullanan, React + Spring Boot + Python FastAPI tabanlı RAG soru-cevap platformu.
 
 Bu proje şu akışı gerçekleştirir:
 
 1. Kullanıcı sisteme kayıt olur / giriş yapar.
 2. PDF, DOCX veya TXT belge yükler.
-3. Spring Boot backend belgeyi kaydeder ve Flask AI servisine gönderir.
-4. Flask servisi PDF/DOCX/TXT metnini (DOCX tabloları dahil) çıkarır, belge profilini oluşturur, chunk'lara böler, açık kaynak embedding modeliyle vektörleştirir ve PostgreSQL içindeki pgvector indeksine kaydeder.
+3. Spring Boot backend belgeyi kaydeder ve FastAPI AI servisine gönderir.
+4. FastAPI servisi PDF/DOCX/TXT metnini (DOCX tabloları dahil) çıkarır, belge profilini oluşturur, chunk'lara böler, açık kaynak embedding modeliyle vektörleştirir ve PostgreSQL içindeki pgvector indeksine kaydeder.
 5. Kullanıcı belge hakkında soru sorar.
-6. Flask servisi soru türüne göre belge profilini veya en alakalı kaynak parçalarını seçer; yapılandırılmışsa yerel LLM ile, değilse QA/extractive fallback ile belgeye dayalı cevap üretir.
+6. FastAPI servisi soru türüne göre belge profilini veya en alakalı kaynak parçalarını seçer; yapılandırılmışsa yerel LLM ile, değilse QA/extractive fallback ile belgeye dayalı cevap üretir.
 7. Spring Boot cevabı ve kaynakları chat geçmişine; seçilen chunk’ları, prompt’u, model cevabını, süreyi ve hatayı LLM çalışma izine kaydeder.
 8. React arayüz cevapları ve kaynak parçaları gösterir.
 
@@ -20,7 +20,7 @@ React Frontend
       ↓
 Spring Boot Backend
       ↓
-Python Flask AI Service
+Python FastAPI AI Service
       ↓
 Open-source Embedding + QA Models
       ↓
@@ -45,7 +45,7 @@ PostgreSQL + pgvector
 - Maven
 
 ### AI Service
-- Python Flask
+- Python FastAPI
 - pypdf
 - python-docx
 - sentence-transformers
@@ -157,8 +157,8 @@ Servisler:
 
 - Frontend: http://localhost:3000
 - Backend: http://localhost:8080
-- AI Service health: http://localhost:5000/api/health
-- PostgreSQL: localhost:5432
+- AI Service health: http://localhost:5001/api/health
+- PostgreSQL: localhost:5433
 
 ## Manuel çalıştırma
 
@@ -185,7 +185,7 @@ cd ai-service
 python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-python app.py
+uvicorn app:app --host 0.0.0.0 --port 5000
 ```
 
 ### 3. Backend
@@ -270,7 +270,7 @@ Bu dokümanda hangi yükümlülüklerden bahsediliyor?
 ```text
 private-document-rag-ai/
 ├── backend/       # Spring Boot ana backend
-├── ai-service/    # Flask RAG servisi
+├── ai-service/    # FastAPI RAG servisi
 ├── frontend/      # React arayüz
 ├── docker-compose.yml
 └── README.md
@@ -280,7 +280,7 @@ private-document-rag-ai/
 
 **Kurumsal Belge Analizi ve Soru-Cevap Platformu — RAG AI**
 
-- React, Spring Boot ve Python Flask kullanarak özel PDF/DOCX/TXT belgeleri üzerinde çalışan RAG tabanlı soru-cevap platformu geliştirdim.
+- React, Spring Boot ve Python FastAPI kullanarak özel PDF/DOCX/TXT belgeleri üzerinde çalışan RAG tabanlı soru-cevap platformu geliştirdim.
 - Belge yükleme, metin çıkarma, chunking, embedding üretimi, vektör benzerlik araması ve kaynaklı cevap üretimi süreçlerini uçtan uca tasarladım.
 - Spring Security JWT ile rol/departman bazlı belge erişim kontrolü sağladım; PostgreSQL üzerinde kullanıcı, belge, chat geçmişi, audit log ve LLM trace kayıtlarını yönettim.
 - JSON yerine pgvector üzerinde HNSW vektör araması, yeniden indeksleme ve kaynak bazlı RAG gözlemlenebilirliği kurdum.
