@@ -144,6 +144,27 @@ class PgVectorStore:
             for row in rows
         ]
 
+    def all_chunks(self, document_id: str) -> List[Dict[str, Any]]:
+        self._ensure_schema()
+        import psycopg
+
+        with psycopg.connect(self.dsn) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT chunk_index, page_number, content
+                    FROM rag_document_chunks
+                    WHERE document_id = %s
+                    ORDER BY chunk_index
+                    """,
+                    (str(document_id),),
+                )
+                rows = cursor.fetchall()
+        return [
+            {"chunkIndex": row[0], "pageNumber": row[1], "text": row[2], "score": 1.0}
+            for row in rows
+        ]
+
     def _ensure_schema(self) -> None:
         if self._schema_ready:
             return
