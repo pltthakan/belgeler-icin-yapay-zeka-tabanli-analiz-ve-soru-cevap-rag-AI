@@ -40,6 +40,10 @@ class RagEngine:
         self.ollama_base_url = os.getenv("OLLAMA_BASE_URL", "").rstrip("/")
         self.ollama_model = os.getenv("OLLAMA_MODEL", "").strip()
         self.ollama_timeout_seconds = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "30"))
+        # Vektör araması her sorgu için teknik olarak bir sonuç döndürebilir.
+        # Düşük skorlu sonuçları LLM'e göndermemek hem halüsinasyonu hem de
+        # anlamsız sorulardaki gereksiz beklemeyi engeller.
+        self.min_retrieval_score = self._read_retrieval_score_threshold()
         self.pgvector_dsn = os.getenv("PGVECTOR_DSN", "").strip()
         self._vector_store = PgVectorStore(self.pgvector_dsn) if self.pgvector_dsn else None
 
@@ -120,6 +124,16 @@ class RagEngine:
         embeddings = np.array(index["embeddings"], dtype=np.float32)
         document_profile = index.get("documentProfile") or self._build_document_profile(chunks)
 
+        ordered_result = self._answer_order_sensitive_question(
+            question=question,
+            chunks=[self._source_from_chunk(chunk, 1.0) for chunk in chunks],
+            document_profile=document_profile,
+            top_k=top_k,
+            started_at=started_at,
+        )
+        if ordered_result is not None:
+            return ordered_result
+
         question_embedding = self._embed_texts([question])[0]
         scores = embeddings @ question_embedding
         top_indices = np.argsort(scores)[::-1][:max(top_k, 1)]
@@ -134,6 +148,10 @@ class RagEngine:
                 self._source_from_chunk(chunks[int(idx)], float(scores[int(idx)]))
                 for idx in top_indices
             ]
+
+        guard_result = self._relevance_guard_result(question, selected_sources)
+        if guard_result is not None:
+            return self._answer_result_from_guard(guard_result, started_at)
 
         answer, generation = self._build_answer_result(question, selected_sources, document_profile)
         return {
@@ -162,11 +180,25 @@ class RagEngine:
     ) -> Dict[str, Any]:
         started_at = time.perf_counter()
         response_mode = self._classify_response_mode(question)
+        ordered_result = self._answer_order_sensitive_question(
+            question=question,
+            chunks=self._vector_store.all_chunks(document_id),
+            document_profile=document_profile,
+            top_k=top_k,
+            started_at=started_at,
+        )
+        if ordered_result is not None:
+            return ordered_result
+
         if response_mode == "summary":
             selected_sources = self._vector_store.initial_chunks(document_id, top_k)
         else:
             question_embedding = self._embed_texts([question])[0]
             selected_sources = self._vector_store.search(document_id, question_embedding, top_k)
+
+        guard_result = self._relevance_guard_result(question, selected_sources)
+        if guard_result is not None:
+            return self._answer_result_from_guard(guard_result, started_at)
 
         answer, generation = self._build_answer_result(question, selected_sources, document_profile)
         return {
@@ -194,11 +226,31 @@ class RagEngine:
         reader = PdfReader(io.BytesIO(raw_bytes))
         pages = []
         for i, page in enumerate(reader.pages, start=1):
-            text = page.extract_text() or ""
+            text = self._extract_pdf_page_text(page, raw_bytes, i)
             cleaned = self._clean_text(text)
             if cleaned:
                 pages.append({"pageNumber": i, "text": cleaned})
         return pages
+
+    def _extract_pdf_page_text(self, page, raw_bytes: bytes, page_number: int) -> str:
+        try:
+            return page.extract_text() or ""
+        except Exception as exc:
+            print(f"pypdf sayfa {page_number} metin çıkarımı başarısız, PyMuPDF deneniyor: {exc}")
+            return self._extract_pdf_page_text_with_pymupdf(raw_bytes, page_number)
+
+    def _extract_pdf_page_text_with_pymupdf(self, raw_bytes: bytes, page_number: int) -> str:
+        try:
+            import fitz
+
+            with fitz.open(stream=raw_bytes, filetype="pdf") as document:
+                if page_number < 1 or page_number > document.page_count:
+                    return ""
+                page = document.load_page(page_number - 1)
+                return page.get_text("text") or ""
+        except Exception as exc:
+            print(f"PyMuPDF sayfa {page_number} metin çıkarımı başarısız: {exc}")
+            return ""
 
     def _extract_docx_pages(self, raw_bytes: bytes) -> List[Dict[str, Any]]:
         document = DocxDocument(io.BytesIO(raw_bytes))
@@ -400,6 +452,301 @@ class RagEngine:
             "retrievedChunks": selected_sources,
         }
 
+    def _answer_order_sensitive_question(
+        self,
+        question: str,
+        chunks: List[Dict[str, Any]],
+        document_profile: Dict[str, str],
+        top_k: int,
+        started_at: float,
+    ) -> Dict[str, Any] | None:
+        direction = self._order_sensitive_direction(question)
+        if direction is None:
+            return None
+
+        structured_result = self._answer_latest_course_question(question, chunks, started_at)
+        if structured_result is not None:
+            return structured_result
+
+        sources = self._ordered_sources(chunks, direction, top_k)
+        if not sources:
+            return None
+
+        answer, generation = self._build_answer_result(question, sources, document_profile)
+        generation = {**generation, "retrievalStrategy": f"document-order-{direction}"}
+        return {
+            "answer": answer,
+            "sources": sources,
+            "trace": self._build_trace(
+                generation=generation,
+                selected_sources=sources,
+                duration_ms=(time.perf_counter() - started_at) * 1000,
+            ),
+        }
+
+    def _answer_latest_course_question(
+        self,
+        question: str,
+        chunks: List[Dict[str, Any]],
+        started_at: float,
+    ) -> Dict[str, Any] | None:
+        if not self._is_latest_course_question(question):
+            return None
+
+        latest_course = self._extract_latest_course(chunks)
+        if latest_course is None:
+            return None
+
+        answer = (
+            f"Belgeye göre en son dönem {latest_course['term']}; "
+            f"bu dönemde görünen ders {latest_course['code']} {latest_course['name']} dersidir."
+        )
+        sources = [latest_course["source"]]
+
+        return {
+            "answer": answer,
+            "sources": sources,
+            "trace": self._build_trace(
+                generation={
+                    "provider": "transcript-structure",
+                    "model": None,
+                    "responseMode": "factual",
+                    "prompt": None,
+                },
+                selected_sources=sources,
+                duration_ms=(time.perf_counter() - started_at) * 1000,
+            ),
+        }
+
+    def _order_sensitive_direction(self, question: str) -> str | None:
+        normalized = self._normalize_for_matching(question)
+        if re.search(r"\b(?:en\s+son|son|sonuncu|en\s+yeni|guncel|latest)\b", normalized):
+            return "last"
+        if re.search(r"\b(?:ilk|birinci|baslangic|en\s+eski|oldest)\b", normalized):
+            return "first"
+        return None
+
+    def _ordered_sources(
+        self,
+        chunks: List[Dict[str, Any]],
+        direction: str,
+        top_k: int,
+    ) -> List[Dict[str, Any]]:
+        ordered = sorted(
+            chunks,
+            key=lambda source: int(source.get("chunkIndex") or 0),
+        )
+        limit = max(top_k, 1)
+        if direction == "first":
+            return ordered[:limit]
+        if direction == "last":
+            return ordered[-limit:]
+        return []
+
+    def _is_latest_course_question(self, question: str) -> bool:
+        normalized = self._normalize_for_matching(question)
+        return "ders" in normalized and any(marker in normalized for marker in (
+            "aldigi son",
+            "en son aldigi",
+            "son aldigi",
+            "son ders",
+            "en son ders",
+        ))
+
+    def _extract_latest_course(self, chunks: List[Dict[str, Any]]) -> Dict[str, Any] | None:
+        latest = None
+        current_term = None
+        term_pattern = re.compile(r"(\d{4}-\d{4})\s*(Güz|Bahar|Yaz)", re.IGNORECASE)
+        course_pattern = re.compile(
+            r"\b([A-ZÇĞİÖŞÜ]{2,}\d{3}-\d{4})\s+(.+?)\s+"
+            r"(\d+)\s+(A1|A2|A3|B1|B2|B3|C1|C2|C3|D1|D2|D3|F1|F2|F3|FF|DZ|YT|YZ)\s+"
+            r"[\d,]+\s+\d+\b"
+        )
+
+        for chunk in chunks:
+            for raw_line in chunk.get("text", "").splitlines():
+                line = self._normalize_whitespace(raw_line)
+                if not line:
+                    continue
+
+                term_match = term_pattern.search(line)
+                if term_match:
+                    current_term = {
+                        "label": f"{term_match.group(1)} {term_match.group(2)}",
+                        "sort": self._term_sort_key(term_match.group(1), term_match.group(2)),
+                    }
+
+                if current_term is None:
+                    continue
+
+                course_match = course_pattern.search(line)
+                if not course_match:
+                    continue
+
+                candidate = {
+                    "term": current_term["label"],
+                    "termSort": current_term["sort"],
+                    "code": course_match.group(1),
+                    "name": self._normalize_whitespace(course_match.group(2)),
+                    "source": {
+                        "pageNumber": chunk.get("pageNumber"),
+                        "chunkIndex": chunk.get("chunkIndex"),
+                        "score": chunk.get("score", 1.0),
+                        "text": line,
+                    },
+                }
+                if latest is None or candidate["termSort"] >= latest["termSort"]:
+                    latest = candidate
+
+        return latest
+
+    def _term_sort_key(self, academic_year: str, term_name: str) -> tuple[int, int]:
+        start_year = int(academic_year.split("-", 1)[0])
+        term_order = {
+            "guz": 1,
+            "bahar": 2,
+            "yaz": 3,
+        }
+        return (start_year, term_order.get(self._normalize_for_matching(term_name), 0))
+
+    def _answer_result_from_guard(self, guard_result: Dict[str, Any], started_at: float) -> Dict[str, Any]:
+        """Model çağrısı gerektirmeyen, düşük-alaka düzeyi yanıtını döndürür."""
+        return {
+            "answer": (
+                "Bu soru belge içeriğiyle yeterince ilişkili görünmüyor. "
+                "Belgedeki bir konu, kişi, tarih veya bilgi hakkında daha açık bir soru sorabilirsin."
+            ),
+            # İlişkisiz kaynakları cevapla birlikte göstermemek gerekir; aksi halde
+            # kullanıcıya yanlış bir kanıt ilişkisi sunulmuş olur.
+            "sources": [],
+            "trace": self._build_trace(
+                generation=guard_result,
+                selected_sources=[],
+                duration_ms=(time.perf_counter() - started_at) * 1000,
+            ),
+        }
+
+    def _relevance_guard_result(
+        self,
+        question: str,
+        selected_sources: List[Dict[str, Any]],
+    ) -> Dict[str, Any] | None:
+        """Alakasız sorgularda LLM/QA çağrısından önce durur.
+
+        Belge özeti soruları özel bir durumdur: doğal olarak belge-genel bir
+        ifadeye sahip oldukları için kaynak skoru yerine belge profiliyle yanıtlanır.
+        """
+        if self._is_document_overview_question(question):
+            return None
+
+        scores = [float(source.get("score", 0.0)) for source in selected_sources]
+        max_score = max(scores, default=0.0)
+        if self._is_obvious_gibberish(question):
+            reason = "gibberish-question"
+        elif self._is_low_information_question(question, selected_sources):
+            reason = "low-information-question"
+        elif not selected_sources or max_score < self.min_retrieval_score:
+            reason = "low-retrieval-score"
+        else:
+            return None
+
+        return {
+            "provider": "retrieval-guard",
+            "model": None,
+            "responseMode": self._classify_response_mode(question),
+            "prompt": None,
+            "guardReason": reason,
+            "maxRetrievalScore": round(max_score, 4),
+            "minRetrievalScore": self.min_retrieval_score,
+        }
+
+    def _read_retrieval_score_threshold(self) -> float:
+        try:
+            value = float(os.getenv("RAG_MIN_RETRIEVAL_SCORE", "0.10"))
+        except ValueError:
+            value = 0.10
+        return min(max(value, 0.0), 1.0)
+
+    def _is_obvious_gibberish(self, question: str) -> bool:
+        """Tek, uzun ve neredeyse sesli harfsiz rastgele dizileri ayıklar.
+
+        Bu kontrol kasıtlı olarak dardır; normal isimleri, kodları veya belge
+        içeriğindeki kısa terimleri engellemez. Diğer alakasız sorular skor eşiği
+        ile değerlendirilir.
+        """
+        tokens = re.findall(r"[a-z]+", self._normalize_for_matching(question))
+        if len(tokens) != 1 or len(tokens[0]) < 7:
+            return False
+        token = tokens[0]
+        vowel_count = sum(character in "aeiou" for character in token)
+        return vowel_count / len(token) < 0.15
+
+    def _is_low_information_question(self, question: str, selected_sources: List[Dict[str, Any]]) -> bool:
+        """Kısa, bağlamsız veya sohbet dışı ifadelerde rastgele chunk cevabını engeller."""
+        normalized = self._normalize_for_matching(question)
+        tokens = re.findall(r"[a-z0-9]+", normalized)
+        if not tokens:
+            return True
+
+        conversational_noise = (
+            "ne bileyim",
+            "bilmiyorum",
+            "bosver",
+            "rastgele",
+            "sacma",
+            "laf olsun",
+        )
+        if any(marker in normalized for marker in conversational_noise):
+            return True
+        if any(token in {"la", "lan", "lo", "ya"} for token in tokens) and len(tokens) <= 3:
+            return True
+
+        question_terms = self._meaningful_terms(question)
+        if not question_terms:
+            return True
+
+        source_terms = set()
+        for source in selected_sources:
+            source_terms.update(self._meaningful_terms(source.get("text", "")))
+
+        has_question_shape = any(marker in normalized for marker in (
+            " nedir",
+            " ne ",
+            " nasil",
+            " hangi",
+            " kac",
+            " kim",
+            " nerede",
+            " neden",
+            " mi",
+            " mu",
+            " mii",
+            "?",
+        ))
+        has_source_overlap = self._has_term_overlap(question_terms, source_terms)
+
+        # Tek kelimelik meşru aramalar ("ortalama", "notlar" gibi) kaynakla
+        # örtüşüyorsa kalsın; örtüşmüyorsa vektör benzerliğinin rastgele bir
+        # belge parçasını cevaba dönüştürmesine izin verme.
+        if len(question_terms) <= 1 and not has_source_overlap and not has_question_shape:
+            return True
+        if len(question_terms) <= 2 and not has_source_overlap and not has_question_shape:
+            return True
+        return False
+
+    def _has_term_overlap(self, question_terms: set[str], source_terms: set[str]) -> bool:
+        if question_terms & source_terms:
+            return True
+        for question_term in question_terms:
+            for source_term in source_terms:
+                shortest = min(len(question_term), len(source_term))
+                if shortest >= 5 and (
+                    question_term.startswith(source_term[:shortest])
+                    or source_term.startswith(question_term[:shortest])
+                ):
+                    return True
+        return False
+
     def _source_from_chunk(self, chunk: Dict[str, Any], score: float) -> Dict[str, Any]:
         return {
             "pageNumber": chunk.get("pageNumber"),
@@ -461,6 +808,18 @@ class RagEngine:
             "dokuman konusu",
             "bu belge nedir",
             "bu dokuman nedir",
+            "bu nasil bir belge",
+            "nasil bir belge",
+            "bu nasil bir dokuman",
+            "nasil bir dokuman",
+            "belgenin icerigi ne",
+            "belge icerigi ne",
+            "dokumanin icerigi ne",
+            "dokuman icerigi ne",
+            "bu belgede neler var",
+            "belgede neler var",
+            "bu dokumanda neler var",
+            "dokumanda neler var",
             "bu belgede ne anlatiliyor",
             "bu belge ne anlatiyor",
             "belgede ne anlatiliyor",
@@ -702,6 +1061,8 @@ CEVAP:"""
             "acaba", "ama", "bir", "bu", "bunu", "da", "de", "gibi", "icin", "ile",
             "mi", "mu", "nasil", "ne", "nedir", "olan", "olarak", "soru", "su", "ve",
             "veya", "ya", "belge", "belgede", "belgenin", "dokuman", "dokumanda",
+            "ben", "bana", "beni", "benim", "sen", "sana", "seni", "senin", "la", "lan",
+            "get", "git", "hadi",
         }
         return {
             term for term in re.findall(r"[a-z0-9]+", self._normalize_for_matching(text))
