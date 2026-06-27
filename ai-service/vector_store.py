@@ -122,6 +122,96 @@ class PgVectorStore:
             for row in rows
         ]
 
+    def hybrid_search(self, document_id: str, query: str, embedding, top_k: int) -> List[Dict[str, Any]]:
+        self._ensure_schema()
+        import psycopg
+
+        vector = self._vector_literal(embedding)
+        candidate_limit = max(top_k * 5, 20)
+        with psycopg.connect(self.dsn) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    WITH query AS (
+                        SELECT websearch_to_tsquery('simple', %s) AS ts_query
+                    ),
+                    dense AS (
+                        SELECT chunk_index,
+                               page_number,
+                               content,
+                               1 - (embedding <=> %s::vector) AS dense_score,
+                               ROW_NUMBER() OVER (ORDER BY embedding <=> %s::vector) AS dense_rank
+                        FROM rag_document_chunks
+                        WHERE document_id = %s
+                        ORDER BY embedding <=> %s::vector
+                        LIMIT %s
+                    ),
+                    sparse AS (
+                        SELECT c.chunk_index,
+                               c.page_number,
+                               c.content,
+                               ts_rank_cd(to_tsvector('simple', c.content), query.ts_query) AS sparse_score,
+                               ROW_NUMBER() OVER (
+                                   ORDER BY ts_rank_cd(to_tsvector('simple', c.content), query.ts_query) DESC
+                               ) AS sparse_rank
+                        FROM rag_document_chunks c
+                        CROSS JOIN query
+                        WHERE c.document_id = %s
+                          AND query.ts_query @@ to_tsvector('simple', c.content)
+                        ORDER BY sparse_score DESC
+                        LIMIT %s
+                    ),
+                    merged AS (
+                        SELECT
+                            COALESCE(dense.chunk_index, sparse.chunk_index) AS chunk_index,
+                            COALESCE(dense.page_number, sparse.page_number) AS page_number,
+                            COALESCE(dense.content, sparse.content) AS content,
+                            dense.dense_score,
+                            sparse.sparse_score,
+                            dense.dense_rank,
+                            sparse.sparse_rank,
+                            COALESCE(1.0 / (60 + dense.dense_rank), 0) +
+                            COALESCE(1.0 / (60 + sparse.sparse_rank), 0) AS hybrid_score
+                        FROM dense
+                        FULL OUTER JOIN sparse USING (chunk_index)
+                    )
+                    SELECT chunk_index,
+                           page_number,
+                           content,
+                           COALESCE(dense_score, 0) AS dense_score,
+                           COALESCE(sparse_score, 0) AS sparse_score,
+                           hybrid_score
+                    FROM merged
+                    ORDER BY hybrid_score DESC
+                    LIMIT %s
+                    """,
+                    (
+                        query,
+                        vector,
+                        vector,
+                        str(document_id),
+                        vector,
+                        candidate_limit,
+                        str(document_id),
+                        candidate_limit,
+                        max(top_k, 1),
+                    ),
+                )
+                rows = cursor.fetchall()
+        return [
+            {
+                "chunkIndex": row[0],
+                "pageNumber": row[1],
+                "text": row[2],
+                "score": max(float(row[3]), min(float(row[4]), 1.0)),
+                "denseScore": float(row[3]),
+                "sparseScore": float(row[4]),
+                "hybridScore": float(row[5]),
+                "retrievalStrategy": "hybrid",
+            }
+            for row in rows
+        ]
+
     def initial_chunks(self, document_id: str, limit: int) -> List[Dict[str, Any]]:
         self._ensure_schema()
         import psycopg
@@ -209,6 +299,12 @@ class PgVectorStore:
                     """
                     CREATE INDEX IF NOT EXISTS rag_document_chunks_embedding_idx
                     ON rag_document_chunks USING hnsw (embedding vector_cosine_ops)
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS rag_document_chunks_content_fts_idx
+                    ON rag_document_chunks USING gin (to_tsvector('simple', content))
                     """
                 )
         self._schema_ready = True

@@ -128,6 +128,34 @@ class RagEngineAnswerTests(unittest.TestCase):
             [0, 1],
         )
 
+    def test_memory_hybrid_search_combines_dense_and_sparse_matches(self):
+        chunks = [
+            {"chunkIndex": 0, "pageNumber": 1, "text": "Bu bölüm genel eğitim bilgilerini açıklar."},
+            {"chunkIndex": 1, "pageNumber": 1, "text": "Aday Pluton projesinde REST API geliştirdi."},
+            {"chunkIndex": 2, "pageNumber": 1, "text": "Bu bölüm iletişim bilgilerini içerir."},
+        ]
+        dense_scores = [0.92, 0.31, 0.12]
+
+        sources = self.engine._hybrid_sources_from_memory(
+            chunks=chunks,
+            dense_scores=dense_scores,
+            question="Pluton REST API",
+            top_k=2,
+        )
+
+        self.assertEqual(sources[0]["chunkIndex"], 1)
+        self.assertEqual(sources[0]["retrievalStrategy"], "hybrid")
+        self.assertGreater(sources[0]["sparseScore"], 0)
+        self.assertIn(0, [source["chunkIndex"] for source in sources])
+
+    def test_lexical_retrieval_score_tolerates_turkish_suffixes(self):
+        score = self.engine._lexical_retrieval_score(
+            {"ortalama"},
+            "Hakan Polat'ın 2022-2023 Bahar dönemi not ortalaması 0,70.",
+        )
+
+        self.assertGreater(score, 0)
+
     def test_qa_quality_gate_rejects_single_character_spans(self):
         self.assertFalse(self.engine._is_usable_qa_answer("I"))
         self.assertFalse(self.engine._is_usable_qa_answer(" "))
