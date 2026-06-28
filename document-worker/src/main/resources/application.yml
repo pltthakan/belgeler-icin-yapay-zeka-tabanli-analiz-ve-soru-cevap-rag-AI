@@ -1,9 +1,8 @@
-server:
-  port: 8080
-
 spring:
   application:
-    name: private-document-rag-backend
+    name: private-document-rag-worker
+  main:
+    web-application-type: none
   datasource:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/ragdb}
     username: ${SPRING_DATASOURCE_USERNAME:postgres}
@@ -13,22 +12,13 @@ spring:
     port: ${SPRING_RABBITMQ_PORT:5672}
     username: ${SPRING_RABBITMQ_USERNAME:guest}
     password: ${SPRING_RABBITMQ_PASSWORD:guest}
-  jpa:
-    hibernate:
-      ddl-auto: update
-    properties:
-      hibernate:
-        format_sql: true
-    open-in-view: false
-  servlet:
-    multipart:
-      max-file-size: 20MB
-      max-request-size: 20MB
+    listener:
+      simple:
+        concurrency: ${DOCUMENT_WORKER_CONCURRENCY:1}
+        max-concurrency: ${DOCUMENT_WORKER_MAX_CONCURRENCY:2}
+        default-requeue-rejected: false
 
 app:
-  jwt:
-    secret: ${JWT_SECRET:dev-secret-key-change-this-value-minimum-32-chars}
-    expiration-ms: ${JWT_EXPIRATION_MS:86400000}
   ai:
     base-url: ${AI_SERVICE_BASE_URL:http://localhost:5000}
   rabbitmq:
@@ -36,5 +26,3 @@ app:
       exchange: ${DOCUMENT_PROCESSING_EXCHANGE:document-processing.exchange}
       queue: ${DOCUMENT_PROCESSING_QUEUE:document-processing.queue}
       routing-key: ${DOCUMENT_PROCESSING_ROUTING_KEY:document-processing}
-  upload-dir: ${APP_UPLOAD_DIR:uploads}
-  bootstrap-admin-email: ${APP_BOOTSTRAP_ADMIN_EMAIL:}

@@ -3,6 +3,7 @@
 
 # Java
 backend/target/
+document-worker/target/
 
 # Node
 frontend/node_modules/
