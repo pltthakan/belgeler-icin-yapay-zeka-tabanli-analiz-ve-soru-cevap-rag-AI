@@ -31,6 +31,12 @@ export default function Dashboard() {
     loadDocuments()
   }, [])
 
+  useEffect(() => {
+    if (!documents.some((doc) => doc.status === 'PROCESSING')) return
+    const intervalId = setInterval(loadDocuments, 5000)
+    return () => clearInterval(intervalId)
+  }, [documents])
+
   const upload = async (e) => {
     e.preventDefault()
     if (!file) return
@@ -102,9 +108,9 @@ export default function Dashboard() {
         <h2>Belge Yükle</h2>
         <form className="upload-form" onSubmit={upload}>
           <input type="file" accept=".pdf,.docx,.txt" onChange={(e) => setFile(e.target.files?.[0])} />
-          <button disabled={!file || uploading}>{uploading ? 'İşleniyor...' : 'Yükle ve İşle'}</button>
+          <button disabled={!file || uploading}>{uploading ? 'Yükleniyor...' : 'Yükle ve İşle'}</button>
         </form>
-        <p className="muted">İlk model indirmesinde işlem birkaç dakika sürebilir.</p>
+        <p className="muted">Yükleme tamamlanınca belge arka planda işlenir; durum hazır olana kadar otomatik yenilenir.</p>
       </section>
 
       {error && <div className="alert">{error}</div>}
@@ -129,7 +135,7 @@ export default function Dashboard() {
               <div className="card-actions">
                 <Link className={doc.status === 'READY' ? 'button-link' : 'button-link disabled'} to={doc.status === 'READY' ? `/documents/${doc.id}/chat` : '#'}>Sohbet</Link>
                 {(isAdmin || isManager || String(doc.ownerId) === currentUserId) && <button className="ghost" disabled={doc.status !== 'READY' || reindexingId === doc.id} onClick={() => reindex(doc.id)}>
-                  {reindexingId === doc.id ? 'İndeksleniyor...' : 'Yeniden indeksle'}
+                  {reindexingId === doc.id ? 'Kuyruğa alınıyor...' : 'Yeniden indeksle'}
                 </button>}
                 {(isAdmin || String(doc.ownerId) === currentUserId) && <button className="ghost" disabled={sharingId === doc.id} onClick={() => toggleSharing(doc)}>
                   {sharingId === doc.id ? 'Kaydediliyor...' : doc.sharingScope === 'DEPARTMENT' ? 'Özel yap' : 'Departmanla paylaş'}
