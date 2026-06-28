@@ -3,20 +3,17 @@ package com.hakan.rag.document;
 import com.hakan.rag.chat.ChatMessageRepository;
 import com.hakan.rag.audit.AuditAction;
 import com.hakan.rag.audit.AuditLogService;
-import com.hakan.rag.document.dto.AiIngestResponse;
 import com.hakan.rag.document.dto.DocumentResponse;
 import com.hakan.rag.document.dto.DocumentSharingRequest;
+import com.hakan.rag.document.queue.DocumentProcessingJob;
+import com.hakan.rag.document.queue.DocumentProcessingJobPublisher;
+import com.hakan.rag.document.queue.DocumentProcessingOperation;
 import com.hakan.rag.user.User;
 import com.hakan.rag.util.CurrentUserService;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.io.ByteArrayResource;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.util.LinkedMultiValueMap;
-import org.springframework.util.MultiValueMap;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
@@ -39,6 +36,7 @@ public class DocumentController {
     private final CurrentUserService currentUserService;
     private final DocumentAccessService documentAccessService;
     private final AuditLogService auditLogService;
+    private final DocumentProcessingJobPublisher documentProcessingJobPublisher;
     private final RestTemplate restTemplate;
 
     @Value("${app.upload-dir}")
@@ -52,12 +50,14 @@ public class DocumentController {
                               CurrentUserService currentUserService,
                               DocumentAccessService documentAccessService,
                               AuditLogService auditLogService,
+                              DocumentProcessingJobPublisher documentProcessingJobPublisher,
                               RestTemplate restTemplate) {
         this.documentRepository = documentRepository;
         this.chatMessageRepository = chatMessageRepository;
         this.currentUserService = currentUserService;
         this.documentAccessService = documentAccessService;
         this.auditLogService = auditLogService;
+        this.documentProcessingJobPublisher = documentProcessingJobPublisher;
         this.restTemplate = restTemplate;
     }
 
@@ -83,19 +83,18 @@ public class DocumentController {
         document.setFileSize(file.getSize());
         document.setStoredPath(targetPath.toString());
         document.setStatus(DocumentStatus.PROCESSING);
+        document.setErrorMessage(null);
         documentRepository.save(document);
 
         try {
-            AiIngestResponse aiResponse = sendFileToAiService(document, file);
-            document.setStatus(DocumentStatus.READY);
-            document.setChunkCount(aiResponse.chunkCount());
-            document.setErrorMessage(null);
+            documentProcessingJobPublisher.publish(toProcessingJob(document, DocumentProcessingOperation.INGEST, null));
         } catch (Exception ex) {
             document.setStatus(DocumentStatus.FAILED);
-            document.setErrorMessage(ex.getMessage());
+            document.setErrorMessage("Belge işleme kuyruğuna alınamadı: " + ex.getMessage());
+            documentRepository.save(document);
+            throw new IllegalStateException(document.getErrorMessage());
         }
 
-        documentRepository.save(document);
         auditLogService.record(user, AuditAction.DOCUMENT_UPLOADED, document.getId(), Map.of(
                 "status", document.getStatus().name(),
                 "filename", document.getOriginalFilename()
@@ -133,18 +132,14 @@ public class DocumentController {
         documentRepository.save(document);
 
         try {
-            AiIngestResponse aiResponse = sendStoredFileToAiService(document);
-            document.setStatus(DocumentStatus.READY);
-            document.setChunkCount(aiResponse.chunkCount());
-            document.setErrorMessage(null);
+            documentProcessingJobPublisher.publish(toProcessingJob(document, DocumentProcessingOperation.REINDEX, previousStatus));
         } catch (Exception ex) {
-            // AI servisi indeksi atomik güncellediği için önceki başarılı indeks
-            // kullanılabilir durumda kalır. Eski READY durumunu koru.
             document.setStatus(previousStatus == DocumentStatus.READY ? DocumentStatus.READY : DocumentStatus.FAILED);
-            document.setErrorMessage("Yeniden indeksleme başarısız: " + ex.getMessage());
+            document.setErrorMessage("Yeniden indeksleme kuyruğa alınamadı: " + ex.getMessage());
+            documentRepository.save(document);
+            throw new IllegalStateException(document.getErrorMessage());
         }
 
-        documentRepository.save(document);
         auditLogService.record(user, AuditAction.DOCUMENT_REINDEXED, document.getId(), Map.of(
                 "status", document.getStatus().name(),
                 "chunkCount", String.valueOf(document.getChunkCount())
@@ -185,52 +180,23 @@ public class DocumentController {
         return ResponseEntity.ok(DocumentResponse.from(document));
     }
 
-    private AiIngestResponse sendFileToAiService(DocumentFile document, MultipartFile file) throws Exception {
-        return sendBytesToAiService(document, file.getBytes(), file.getOriginalFilename());
-    }
-
-    private AiIngestResponse sendStoredFileToAiService(DocumentFile document) throws Exception {
+    private DocumentProcessingJob toProcessingJob(
+            DocumentFile document,
+            DocumentProcessingOperation operation,
+            DocumentStatus previousStatus
+    ) {
         if (document.getStoredPath() == null || document.getStoredPath().isBlank()) {
             throw new IllegalStateException("Belgenin saklanan dosya yolu bulunamadı.");
         }
-
-        Path path = Paths.get(document.getStoredPath());
-        if (!Files.isRegularFile(path)) {
-            throw new IllegalStateException("Belgenin saklanan dosyası bulunamadı.");
-        }
-        return sendBytesToAiService(document, Files.readAllBytes(path), document.getOriginalFilename());
-    }
-
-    private AiIngestResponse sendBytesToAiService(DocumentFile document, byte[] bytes, String filename) {
-        ByteArrayResource fileResource = new ByteArrayResource(bytes) {
-            @Override
-            public String getFilename() {
-                return filename;
-            }
-        };
-
-        MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
-        body.add("documentId", document.getId().toString());
-        body.add("ownerId", document.getOwner().getId().toString());
-        if (document.getDepartment() != null) {
-            body.add("departmentId", document.getDepartment().getId().toString());
-        }
-        body.add("file", fileResource);
-
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.MULTIPART_FORM_DATA);
-
-        HttpEntity<MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, headers);
-        ResponseEntity<AiIngestResponse> response = restTemplate.postForEntity(
-                aiBaseUrl + "/api/ingest",
-                requestEntity,
-                AiIngestResponse.class
+        return new DocumentProcessingJob(
+                document.getId(),
+                document.getOwner().getId(),
+                document.getDepartment() == null ? null : document.getDepartment().getId(),
+                document.getStoredPath(),
+                document.getOriginalFilename(),
+                operation,
+                previousStatus
         );
-
-        if (!response.getStatusCode().is2xxSuccessful() || response.getBody() == null) {
-            throw new IllegalStateException("AI servisi belgeyi işleyemedi.");
-        }
-        return response.getBody();
     }
 
     private void deleteAiIndex(Long documentId) {

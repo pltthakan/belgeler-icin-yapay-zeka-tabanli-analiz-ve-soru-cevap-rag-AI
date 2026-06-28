@@ -16,6 +16,23 @@ services:
       timeout: 5s
       retries: 5
 
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: rag-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: rag
+      RABBITMQ_DEFAULT_PASS: rag
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   ai-service:
     build: ./ai-service
     container_name: rag-ai-service
@@ -47,18 +64,48 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
       ai-service:
-        condition: service_started
+        condition: service_healthy
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/ragdb
       SPRING_DATASOURCE_USERNAME: postgres
       SPRING_DATASOURCE_PASSWORD: postgres
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_PORT: 5672
+      SPRING_RABBITMQ_USERNAME: rag
+      SPRING_RABBITMQ_PASSWORD: rag
       JWT_SECRET: dev-secret-key-change-this-value-minimum-32-chars
       AI_SERVICE_BASE_URL: http://ai-service:5000
       APP_UPLOAD_DIR: /app/uploads
       APP_BOOTSTRAP_ADMIN_EMAIL: ${APP_BOOTSTRAP_ADMIN_EMAIL:-}
     ports:
       - "8080:8080"
+    volumes:
+      - backend_uploads:/app/uploads
+
+  document-worker:
+    build: ./document-worker
+    container_name: rag-document-worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      ai-service:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/ragdb
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_PORT: 5672
+      SPRING_RABBITMQ_USERNAME: rag
+      SPRING_RABBITMQ_PASSWORD: rag
+      AI_SERVICE_BASE_URL: http://ai-service:5000
+      DOCUMENT_WORKER_CONCURRENCY: 1
+      DOCUMENT_WORKER_MAX_CONCURRENCY: 2
     volumes:
       - backend_uploads:/app/uploads
 
@@ -75,6 +122,7 @@ services:
 
 volumes:
   postgres_data:
+  rabbitmq_data:
   ai_data:
   hf_cache:
   backend_uploads:
