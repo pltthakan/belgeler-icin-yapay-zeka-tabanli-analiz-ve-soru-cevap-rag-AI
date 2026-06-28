@@ -6,12 +6,14 @@ Bu proje şu akışı gerçekleştirir:
 
 1. Kullanıcı sisteme kayıt olur / giriş yapar.
 2. PDF, DOCX veya TXT belge yükler.
-3. Spring Boot backend belgeyi kaydeder ve FastAPI AI servisine gönderir.
-4. FastAPI servisi PDF/DOCX/TXT metnini (DOCX tabloları dahil) çıkarır, belge profilini oluşturur, chunk'lara böler, açık kaynak embedding modeliyle vektörleştirir ve PostgreSQL içindeki pgvector indeksine kaydeder.
-5. Kullanıcı belge hakkında soru sorar.
-6. FastAPI servisi soru türüne göre belge profilini veya en alakalı kaynak parçalarını seçer; yapılandırılmışsa yerel LLM ile, değilse QA/extractive fallback ile belgeye dayalı cevap üretir.
-7. Spring Boot cevabı ve kaynakları chat geçmişine; seçilen chunk’ları, prompt’u, model cevabını, süreyi ve hatayı LLM çalışma izine kaydeder.
-8. React arayüz cevapları ve kaynak parçaları gösterir.
+3. Spring Boot backend belgeyi kaydeder, durumunu `PROCESSING` yapar ve RabbitMQ'ya belge işleme işi gönderir.
+4. Ayrı Spring Boot worker servisi RabbitMQ kuyruğundan işi tüketir, belge dosyasını ortak upload volume'undan okur ve FastAPI AI servisine gönderir.
+5. FastAPI servisi PDF/DOCX/TXT metnini (DOCX tabloları dahil) çıkarır, belge profilini oluşturur, chunk'lara böler, açık kaynak embedding modeliyle vektörleştirir ve PostgreSQL içindeki pgvector indeksine kaydeder.
+6. Worker işlem sonucuna göre belge durumunu `READY` veya `FAILED` olarak günceller.
+7. Kullanıcı belge hakkında soru sorar.
+8. FastAPI servisi soru türüne göre belge profilini veya en alakalı kaynak parçalarını seçer; yapılandırılmışsa yerel LLM ile, değilse QA/extractive fallback ile belgeye dayalı cevap üretir.
+9. Spring Boot cevabı ve kaynakları chat geçmişine; seçilen chunk’ları, prompt’u, model cevabını, süreyi ve hatayı LLM çalışma izine kaydeder.
+10. React arayüz cevapları ve kaynak parçaları gösterir.
 
 ## Mimari
 
@@ -19,6 +21,10 @@ Bu proje şu akışı gerçekleştirir:
 React Frontend
       ↓
 Spring Boot Backend
+      ↓
+RabbitMQ Document Queue
+      ↓
+Spring Boot Document Worker
       ↓
 Python FastAPI AI Service
       ↓
@@ -40,9 +46,16 @@ PostgreSQL + pgvector
 - Spring Boot 3
 - Spring Security JWT
 - Spring Data JPA
+- RabbitMQ producer
 - PostgreSQL
 - pgvector (HNSW cosine-similarity araması)
 - Maven
+
+### Worker
+- Java 17
+- Spring Boot 3
+- Spring AMQP RabbitMQ consumer
+- Spring JDBC
 
 ### AI Service
 - Python FastAPI
@@ -89,6 +102,16 @@ Mevcut bir belgenin DOCX tablo çıkarımı ve yeni indeksleme kurallarından ya
 Docker Compose, PostgreSQL 16 ile uyumlu `pgvector/pgvector:0.8.2-pg16` imajını kullanır. AI servisinin `PGVECTOR_DSN` bağlantısı varsayılan olarak Compose içindeki PostgreSQL’e bağlıdır. Yüklenen veya **Yeniden indeksle** ile tekrar işlenen her belge için belge profili `rag_document_profiles` tablosuna; chunk metni ve embedding ise `rag_document_chunks` tablosuna yazılır. HNSW indeks, cosine similarity ile en yakın kaynak parçalarını seçer.
 
 Eski JSON indeksleri, daha önce indekslenmiş belgeleri bozmamak için yalnızca geçici uyumluluk fallback’i olarak okunabilir; kalıcı indeksleme hedefi pgvector’dır.
+
+### Asenkron belge işleme
+
+Belge yükleme ve yeniden indeksleme işlemleri HTTP isteği içinde tamamlanmaz. Backend dosyayı `/app/uploads` altına kaydeder, belgeyi `PROCESSING` durumuna alır ve RabbitMQ'daki `document-processing.queue` kuyruğuna bir iş mesajı gönderir. `document-worker` servisi bu işi tüketir, aynı Docker volume'u üzerinden dosyaya erişir, AI servisini çağırır ve işlem tamamlandığında belge durumunu `READY` veya `FAILED` olarak günceller.
+
+Bu yapı büyük PDF yüklemelerinde HTTP timeout riskini azaltır. Worker eşzamanlılığı Compose ortamında varsayılan olarak `DOCUMENT_WORKER_CONCURRENCY=1` ve `DOCUMENT_WORKER_MAX_CONCURRENCY=2` ile sınırlıdır; böylece embedding işlemleri AI servisini aşırı yüklemez.
+
+### RAG guardrail katmanı
+
+AI servisi, belge dışı sorularda LLM'i doğrudan çalıştırmaz. Önce retrieval guard ile sorunun seçilen kaynak parçalarıyla ilişkisi kontrol edilir; genel bilgi veya alakasız sorular standart güvenli cevapla döner. Ollama etkinse cevap üretimi sıkı bir belge-bağlam prompt'u ile yapılır ve üretilen cevap tekrar kaynak terimleriyle doğrulanır. Kaynak dışı bilgi eklendiği tespit edilirse cevap iptal edilip "Bu bilgi belgede yer almıyor" fallback'i döndürülür.
 
 ### Roller, departman erişimi ve audit log
 
