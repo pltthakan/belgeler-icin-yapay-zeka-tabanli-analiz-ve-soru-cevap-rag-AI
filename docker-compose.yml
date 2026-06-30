@@ -33,6 +33,31 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7.2-alpine
+    container_name: rag-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis-insight:
+    image: redis/redisinsight:latest
+    container_name: rag-redis-insight
+    ports:
+      - "5540:5540"
+    volumes:
+      - redis_insight_data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+
   ai-service:
     build: ./ai-service
     container_name: rag-ai-service
@@ -47,6 +72,10 @@ services:
       OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-30}
       RAG_MIN_RETRIEVAL_SCORE: ${RAG_MIN_RETRIEVAL_SCORE:-0.10}
       PGVECTOR_DSN: postgresql://postgres:postgres@postgres:5432/ragdb
+      REDIS_URL: redis://redis:6379/0
+      RAG_ANSWER_CACHE_TTL_SECONDS: ${RAG_ANSWER_CACHE_TTL_SECONDS:-3600}
+      RAG_EMBEDDING_CACHE_TTL_SECONDS: ${RAG_EMBEDDING_CACHE_TTL_SECONDS:-604800}
+      RAG_PROFILE_CACHE_TTL_SECONDS: ${RAG_PROFILE_CACHE_TTL_SECONDS:-21600}
     ports:
       - "5001:5000"
     volumes:
@@ -123,6 +152,8 @@ services:
 volumes:
   postgres_data:
   rabbitmq_data:
+  redis_data:
+  redis_insight_data:
   ai_data:
   hf_cache:
   backend_uploads:

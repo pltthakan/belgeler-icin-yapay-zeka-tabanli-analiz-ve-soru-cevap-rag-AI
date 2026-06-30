@@ -289,6 +289,14 @@ class RagEngineAnswerTests(unittest.TestCase):
 
         self.assertIsNone(result)
 
+    def test_relevance_guard_keeps_route_questions_without_exact_term_overlap(self):
+        result = self.engine._relevance_guard_result(
+            "nerden nereye uçuyor",
+            [{"score": 0.72, "text": "MALATYA/MLX\n\nISTANBUL/IST\n\nTK\n2631"}],
+        )
+
+        self.assertIsNone(result)
+
     def test_relevance_guard_keeps_document_overview_questions(self):
         for question in (
             "Bu belgenin ana konusu nedir?",
