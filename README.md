@@ -17,21 +17,8 @@ Bu proje şu akışı gerçekleştirir:
 
 ## Mimari
 
-```text
-React Frontend
-      ↓
-Spring Boot Backend
-      ↓
-RabbitMQ Document Queue
-      ↓
-Spring Boot Document Worker
-      ↓
-Python FastAPI AI Service
-      ↓
-Open-source Embedding + QA Models
-      ↓
-PostgreSQL + pgvector
-```
+<img width="504" height="675" alt="Ekran Resmi 2026-06-30 21 12 07" src="https://github.com/user-attachments/assets/4c229c2e-40ec-44e9-9a59-f36b6b5f6417" />
+
 
 ## Kullanılan teknolojiler
 
