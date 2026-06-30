@@ -62,19 +62,44 @@ class PgVectorStore:
             connection.commit()
 
     def get_profile(self, document_id: str) -> Dict[str, Any] | None:
+        record = self.get_profile_record(document_id)
+        return None if record is None else record["profile"]
+
+    def get_profile_version(self, document_id: str) -> str | None:
         self._ensure_schema()
         import psycopg
 
         with psycopg.connect(self.dsn) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
-                    "SELECT profile FROM rag_document_profiles WHERE document_id = %s",
+                    "SELECT updated_at FROM rag_document_profiles WHERE document_id = %s",
                     (str(document_id),),
                 )
                 row = cursor.fetchone()
         if row is None:
             return None
-        return row[0] if isinstance(row[0], dict) else json.loads(row[0])
+        updated_at = row[0]
+        return updated_at.isoformat() if hasattr(updated_at, "isoformat") else str(updated_at)
+
+    def get_profile_record(self, document_id: str) -> Dict[str, Any] | None:
+        self._ensure_schema()
+        import psycopg
+
+        with psycopg.connect(self.dsn) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT profile, updated_at FROM rag_document_profiles WHERE document_id = %s",
+                    (str(document_id),),
+                )
+                row = cursor.fetchone()
+        if row is None:
+            return None
+        profile = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+        updated_at = row[1]
+        return {
+            "profile": profile,
+            "indexVersion": updated_at.isoformat() if hasattr(updated_at, "isoformat") else str(updated_at),
+        }
 
     def delete_document(self, document_id: str) -> None:
         """Belge silindiğinde ilişkili tüm embedding ve profil kaydını kaldırır."""

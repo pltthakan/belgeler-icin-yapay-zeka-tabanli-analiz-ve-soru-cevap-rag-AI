@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List
 
 import numpy as np
+from cache import RagCache, stable_hash
 from docx import Document as DocxDocument
 from docx.oxml.table import CT_Tbl
 from docx.oxml.text.paragraph import CT_P
@@ -46,6 +47,7 @@ class RagEngine:
         self.min_retrieval_score = self._read_retrieval_score_threshold()
         self.pgvector_dsn = os.getenv("PGVECTOR_DSN", "").strip()
         self._vector_store = PgVectorStore(self.pgvector_dsn) if self.pgvector_dsn else None
+        self.cache = RagCache()
 
         self._embedding_model = None
         self._qa_pipeline = None
@@ -85,6 +87,7 @@ class RagEngine:
                 embeddings=embeddings,
                 profile=document_profile,
             )
+            self._invalidate_document_cache(document_id)
         else:
             # PGVECTOR_DSN ayarlanmamış yerel geliştirme ortamları için eski
             # dosya tabanlı indeks yalnızca uyumluluk fallback'i olarak kalır.
@@ -100,6 +103,7 @@ class RagEngine:
             temporary_index_path = index_path.with_suffix(".tmp")
             temporary_index_path.write_text(json.dumps(index_payload, ensure_ascii=False), encoding="utf-8")
             temporary_index_path.replace(index_path)
+            self._invalidate_document_cache(document_id)
 
         return {
             "documentId": document_id,
@@ -110,19 +114,53 @@ class RagEngine:
     def answer_question(self, document_id: str, question: str, top_k: int = 4) -> Dict[str, Any]:
         started_at = time.perf_counter()
         if self._vector_store is not None:
-            document_profile = self._vector_store.get_profile(document_id)
-            if document_profile is not None:
-                return self._answer_question_from_pgvector(
+            index_version = self._vector_store.get_profile_version(document_id)
+            if index_version is not None:
+                cached_result = self._get_cached_answer(
                     document_id=document_id,
                     question=question,
                     top_k=top_k,
-                    document_profile=document_profile,
+                    index_version=index_version,
+                    started_at=started_at,
                 )
+                if cached_result is not None:
+                    return cached_result
+
+                profile_record = self._get_cached_profile_record(document_id, index_version)
+                if profile_record is None:
+                    raise FileNotFoundError("Bu belge için vektör indeksi bulunamadı.")
+
+                result = self._answer_question_from_pgvector(
+                    document_id=document_id,
+                    question=question,
+                    top_k=top_k,
+                    document_profile=profile_record["profile"],
+                    started_at=started_at,
+                )
+                self._cache_answer(
+                    document_id=document_id,
+                    question=question,
+                    top_k=top_k,
+                    index_version=index_version,
+                    result=result,
+                )
+                return result
 
         index = self._load_index(document_id)
         chunks = index["chunks"]
         embeddings = np.array(index["embeddings"], dtype=np.float32)
         document_profile = index.get("documentProfile") or self._build_document_profile(chunks)
+        index_version = self._json_index_version(document_id)
+
+        cached_result = self._get_cached_answer(
+            document_id=document_id,
+            question=question,
+            top_k=top_k,
+            index_version=index_version,
+            started_at=started_at,
+        )
+        if cached_result is not None:
+            return cached_result
 
         ordered_result = self._answer_order_sensitive_question(
             question=question,
@@ -132,9 +170,10 @@ class RagEngine:
             started_at=started_at,
         )
         if ordered_result is not None:
+            self._cache_answer(document_id, question, top_k, index_version, ordered_result)
             return ordered_result
 
-        question_embedding = self._embed_texts([question])[0]
+        question_embedding = self._embed_question(question)
         scores = embeddings @ question_embedding
 
         if self._is_document_overview_question(question):
@@ -152,10 +191,12 @@ class RagEngine:
 
         guard_result = self._relevance_guard_result(question, selected_sources)
         if guard_result is not None:
-            return self._answer_result_from_guard(guard_result, started_at)
+            result = self._answer_result_from_guard(guard_result, started_at)
+            self._cache_answer(document_id, question, top_k, index_version, result)
+            return result
 
         answer, generation = self._build_answer_result(question, selected_sources, document_profile)
-        return {
+        result = {
             "answer": answer,
             "sources": selected_sources,
             "trace": self._build_trace(
@@ -164,13 +205,108 @@ class RagEngine:
                 duration_ms=(time.perf_counter() - started_at) * 1000,
             ),
         }
+        self._cache_answer(document_id, question, top_k, index_version, result)
+        return result
 
     def delete_document(self, document_id: str) -> None:
         """Vektör verisini, ana belge silinmeden önce güvenli biçimde kaldırır."""
         if self._vector_store is not None:
             self._vector_store.delete_document(document_id)
+            self._invalidate_document_cache(document_id)
             return
         self._index_path(document_id).unlink(missing_ok=True)
+        self._invalidate_document_cache(document_id)
+
+    def cache_status(self) -> Dict[str, Any]:
+        return self.cache.status()
+
+    def _get_cached_profile_record(self, document_id: str, index_version: str) -> Dict[str, Any] | None:
+        cache_key = f"profile:{document_id}:{stable_hash(index_version)[:16]}"
+        cached_record = self.cache.get_json(cache_key)
+        if self._is_valid_profile_record(cached_record):
+            return cached_record
+
+        profile_record = self._vector_store.get_profile_record(document_id)
+        if (
+            self._is_valid_profile_record(profile_record)
+            and str(profile_record["indexVersion"]) == str(index_version)
+        ):
+            self.cache.set_json(cache_key, profile_record, self.cache.profile_ttl_seconds)
+            return profile_record
+        return None
+
+    def _get_cached_answer(
+        self,
+        document_id: str,
+        question: str,
+        top_k: int,
+        index_version: str,
+        started_at: float,
+    ) -> Dict[str, Any] | None:
+        cached_result = self.cache.get_json(self._answer_cache_key(document_id, question, top_k, index_version))
+        if not isinstance(cached_result, dict) or "answer" not in cached_result:
+            return None
+
+        trace = cached_result.get("trace")
+        if not isinstance(trace, dict):
+            trace = {}
+        cached_result["trace"] = {
+            **trace,
+            "cacheHit": True,
+            "cacheProvider": "redis",
+            "durationMs": max(0, round((time.perf_counter() - started_at) * 1000)),
+        }
+        return cached_result
+
+    def _cache_answer(
+        self,
+        document_id: str,
+        question: str,
+        top_k: int,
+        index_version: str,
+        result: Dict[str, Any],
+    ) -> None:
+        if not isinstance(result, dict) or "answer" not in result:
+            return
+        cache_key = self._answer_cache_key(document_id, question, top_k, index_version)
+        self.cache.set_json(cache_key, result, self.cache.answer_ttl_seconds)
+
+    def _answer_cache_key(self, document_id: str, question: str, top_k: int, index_version: str) -> str:
+        question_hash = stable_hash(self._normalize_cache_text(question))
+        index_hash = stable_hash(str(index_version))[:16]
+        model_hash = stable_hash(self._answer_model_cache_key())[:16]
+        return f"answer:{document_id}:{index_hash}:topK:{max(top_k, 1)}:model:{model_hash}:question:{question_hash}"
+
+    def _answer_model_cache_key(self) -> str:
+        llm_key = f"ollama:{self.ollama_model}" if self.ollama_base_url and self.ollama_model else "ollama:none"
+        return "|".join((
+            "engine-cache-v1",
+            f"embedding:{self.embedding_model_name}",
+            f"qa:{'disabled' if self.disable_qa_model else self.qa_model_name}",
+            llm_key,
+            f"minScore:{self.min_retrieval_score}",
+        ))
+
+    def _invalidate_document_cache(self, document_id: str) -> None:
+        self.cache.delete_pattern(f"profile:{document_id}:*")
+        self.cache.delete_pattern(f"answer:{document_id}:*")
+
+    def _json_index_version(self, document_id: str) -> str:
+        index_path = self._index_path(document_id)
+        try:
+            return str(index_path.stat().st_mtime_ns)
+        except FileNotFoundError:
+            return "missing"
+
+    def _is_valid_profile_record(self, value: Any) -> bool:
+        return (
+            isinstance(value, dict)
+            and isinstance(value.get("profile"), dict)
+            and bool(value.get("indexVersion"))
+        )
+
+    def _normalize_cache_text(self, text: str) -> str:
+        return self._normalize_whitespace(text).casefold()
 
     def _answer_question_from_pgvector(
         self,
@@ -178,8 +314,8 @@ class RagEngine:
         question: str,
         top_k: int,
         document_profile: Dict[str, Any],
+        started_at: float,
     ) -> Dict[str, Any]:
-        started_at = time.perf_counter()
         response_mode = self._classify_response_mode(question)
         ordered_result = self._answer_order_sensitive_question(
             question=question,
@@ -194,7 +330,7 @@ class RagEngine:
         if response_mode == "summary":
             selected_sources = self._vector_store.initial_chunks(document_id, top_k)
         else:
-            question_embedding = self._embed_texts([question])[0]
+            question_embedding = self._embed_question(question)
             selected_sources = self._vector_store.hybrid_search(document_id, question, question_embedding, top_k)
 
         guard_result = self._relevance_guard_result(question, selected_sources)
@@ -573,6 +709,28 @@ class RagEngine:
             ):
                 return True
         return False
+
+    def _embed_question(self, question: str) -> np.ndarray:
+        cache_key = (
+            f"embedding:{stable_hash(self.embedding_model_name)[:16]}:"
+            f"question:{stable_hash(self._normalize_cache_text(question))}"
+        )
+        cached_vector = self.cache.get_json(cache_key)
+        if isinstance(cached_vector, list):
+            try:
+                vector = np.array(cached_vector, dtype=np.float32)
+                if vector.shape == (384,):
+                    return vector
+            except Exception:
+                pass
+
+        vector = self._embed_texts([question])[0]
+        # Fallback HashingVectorizer sonuçları cache'lenmez; pgvector indeksleri
+        # normalde açık kaynak embedding modeliyle üretildiği için cache anahtarı
+        # sadece model tabanlı soru vektörleri için kalıcı tutulur.
+        if self._embedding_model is not None:
+            self.cache.set_json(cache_key, vector.tolist(), self.cache.embedding_ttl_seconds)
+        return vector
 
     def _embed_texts(self, texts: List[str]) -> np.ndarray:
         model = self._get_embedding_model()
@@ -1000,6 +1158,10 @@ class RagEngine:
             " kac",
             " kim",
             " nerede",
+            " nereden",
+            " nerden",
+            " nereye",
+            " neresi",
             " neden",
             " mi",
             " mu",
@@ -1262,9 +1424,17 @@ class RagEngine:
             "politika", "talimat", "elektronik bilet", "electronic ticket",
             "passenger itinerary", "seyahat belgesi",
         )
-        for candidate in candidates:
+        for index, candidate in enumerate(candidates):
             normalized = self._normalize_for_matching(candidate)
             if any(marker in normalized for marker in title_markers):
+                if index > 0:
+                    previous = candidates[index - 1]
+                    normalized_previous = self._normalize_for_matching(previous)
+                    if self._looks_like_heading(previous) and not any(
+                        marker in normalized_previous
+                        for marker in ("universitesi", "fakultesi", "bolumu")
+                    ):
+                        return f"{previous.rstrip('.:')} — {candidate.rstrip('.:')}"
                 return candidate.rstrip(".:")
 
         for candidate in candidates:
