@@ -19,6 +19,20 @@ Bu proje şu akışı gerçekleştirir:
 
 <img width="504" height="675" alt="Ekran Resmi 2026-06-30 21 12 07" src="https://github.com/user-attachments/assets/4c229c2e-40ec-44e9-9a59-f36b6b5f6417" />
 
+## Kullanıcı Arayüzü Önizlemesi
+
+<img width="1470" height="768" alt="Ekran Resmi 2026-07-02 22 03 23" src="https://github.com/user-attachments/assets/549dcfd5-9a42-4586-b636-9f73e11bb68c" />
+
+<img width="1417" height="772" alt="Ekran Resmi 2026-07-02 22 07 01" src="https://github.com/user-attachments/assets/94c10384-9566-433b-99a8-641bc8096847" />
+
+<img width="1437" height="770" alt="Ekran Resmi 2026-07-02 22 07 52" src="https://github.com/user-attachments/assets/60cadac8-f887-4c3a-a009-72fea8de20fa" />
+
+<img width="1425" height="762" alt="Ekran Resmi 2026-07-02 22 08 14" src="https://github.com/user-attachments/assets/f05b9ef1-cb34-44f2-ba74-f1db1d5c39f7" />
+
+
+
+
+
 
 ## Kullanılan teknolojiler
 
