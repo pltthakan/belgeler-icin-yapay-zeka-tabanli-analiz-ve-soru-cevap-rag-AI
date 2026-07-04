@@ -106,7 +106,7 @@ Eski JSON indeksleri, daha önce indekslenmiş belgeleri bozmamak için yalnızc
 
 ### Reranker
 
-The AI service, using pgvector/hybrid search, retrieves a broader set of candidate sources and re-ranks the most relevant sources using an optional reranker model.
+AI service, pgvector/hybrid search ile daha geniş bir aday kaynak kümesi getirir ve opsiyonel reranker modeliyle en alakalı kaynakları yeniden sıralar.
 
 Varsayılan:
 
@@ -114,6 +114,20 @@ Varsayılan:
 RERANKER_ENABLED=true
 RERANKER_MODEL_NAME=cross-encoder/mmarco-mMiniLMv2-L12-H384-v1
 RERANKER_CANDIDATE_COUNT=20
+
+### Heading-aware chunking
+
+AI service, belge metnini indekslemeden önce başlık yapısını tespit etmeye çalışır. 
+Yönetmelik, yönerge, sözleşme, rapor ve eğitim dokümanı gibi başlıklı belgelerde 
+`Amaç`, `Kapsam`, `Gizlilik`, `Rekabet Etmeme`, `Eğitmenler`, `Program İçeriği` gibi 
+bölümler başlıklarıyla birlikte chunk'lanır.
+
+Bu sayede başlık ile başlığın altındaki açıklama farklı kaynak parçalarına dağılmadan 
+aynı bağlam içinde tutulur. Örneğin `Eğitmenler kimdir?` veya `İşten ayrıldıktan sonra 
+aynı projeyi yapabilir miyim?` gibi sorularda ilgili bölümün bulunma olasılığı artar.
+
+Eğer belgede yeterli başlık yapısı tespit edilemezse sistem otomatik olarak mevcut 
+overlap'li semantik chunking yöntemine geri döner.
 
 ### Asenkron belge işleme
 
