@@ -45,6 +45,7 @@ def health():
         "localLlmEnabled": bool(rag_engine.ollama_base_url and rag_engine.ollama_model),
         "vectorStore": "pgvector" if rag_engine._vector_store is not None else "json-fallback",
         "cache": rag_engine.cache_status(),
+        "reranker": rag_engine.reranker_status(),
     }
 
 

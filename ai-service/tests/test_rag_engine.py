@@ -148,6 +148,29 @@ class RagEngineAnswerTests(unittest.TestCase):
         self.assertGreater(sources[0]["sparseScore"], 0)
         self.assertIn(0, [source["chunkIndex"] for source in sources])
 
+    def test_reranker_reorders_retrieval_candidates(self):
+        class FakeReranker:
+            def predict(self, pairs, show_progress_bar=False):
+                return [0.1, 0.9, 0.2]
+
+        self.engine.reranker_enabled = True
+        self.engine._reranker_model = FakeReranker()
+        sources = [
+            {"chunkIndex": 0, "text": "Ücret ve ödeme zamanı."},
+            {"chunkIndex": 1, "text": "Rekabet etmeme ve gizlilik hükümleri."},
+            {"chunkIndex": 2, "text": "Çalışma süreleri."},
+        ]
+
+        reranked = self.engine._rerank_sources(
+            "işten ayrıldıktan sonra aynı proje",
+            sources,
+            top_k=2,
+        )
+
+        self.assertEqual([source["chunkIndex"] for source in reranked], [1, 2])
+        self.assertTrue(reranked[0]["reranked"])
+        self.assertEqual(reranked[0]["rerankerScore"], 0.9)
+
     def test_lexical_retrieval_score_tolerates_turkish_suffixes(self):
         score = self.engine._lexical_retrieval_score(
             {"ortalama"},
@@ -222,6 +245,45 @@ class RagEngineAnswerTests(unittest.TestCase):
         self.assertTrue(chunks[1]["text"].startswith("YÖNTEM"))
         self.assertTrue(chunks[2]["text"].startswith("SONUÇ"))
         self.assertNotIn("YÖ", chunks[0]["text"][-10:])
+
+    def test_heading_aware_chunking_keeps_sections_together(self):
+        pages = [{
+            "pageNumber": 1,
+            "text": (
+                "1. Amaç\n"
+                "Bu yönergenin amacı eğitim sürecini ve belge işleme kurallarını açıklamaktır.\n"
+                "Amaç bölümü ayrı bir kaynak parçası olarak kalmalıdır.\n"
+                "2. Kapsam\n"
+                "Bu bölüm öğrencileri, eğitmenleri ve eğitim materyallerini kapsar.\n"
+                "Kapsam bilgisi aynı başlık altında tutulmalıdır.\n"
+                "3. Eğitmenler\n"
+                "Eğitmenler Dr. Hüseyin ARIK, Fehmi ARIK ve Erdem Taha Sokullu'dur.\n"
+                "Bu kişilerin isimleri başlıktan kopmamalıdır."
+            ),
+        }]
+
+        chunks = self.engine._chunk_pages(pages, chunk_size=260, overlap=80)
+
+        self.assertEqual(len(chunks), 3)
+        self.assertTrue(chunks[0]["text"].startswith("1. Amaç"))
+        self.assertTrue(chunks[1]["text"].startswith("2. Kapsam"))
+        self.assertTrue(chunks[2]["text"].startswith("3. Eğitmenler"))
+        self.assertIn("Dr. Hüseyin ARIK", chunks[2]["text"])
+
+    def test_heading_aware_chunking_falls_back_when_heading_structure_is_weak(self):
+        pages = [{
+            "pageNumber": 1,
+            "text": (
+                "Bu belge başlık yapısı olmayan normal bir açıklama metnidir. "
+                "Metin birkaç cümleden oluşur ve var olan semantik chunking akışıyla bölünmelidir. "
+                "Bu fallback davranışı başlık tespiti zayıf olduğunda korunmalıdır."
+            ),
+        }]
+
+        self.assertEqual(self.engine._chunk_pages_by_headings(pages, chunk_size=120), [])
+        chunks = self.engine._chunk_pages(pages, chunk_size=120, overlap=0)
+
+        self.assertGreaterEqual(len(chunks), 1)
 
     def test_semantic_chunking_splits_large_blocks_on_word_boundaries(self):
         long_paragraph = (
