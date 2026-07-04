@@ -41,6 +41,12 @@ class RagEngine:
         self.ollama_base_url = os.getenv("OLLAMA_BASE_URL", "").rstrip("/")
         self.ollama_model = os.getenv("OLLAMA_MODEL", "").strip()
         self.ollama_timeout_seconds = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "30"))
+        self.reranker_enabled = os.getenv("RERANKER_ENABLED", "true").lower() == "true"
+        self.reranker_model_name = os.getenv(
+            "RERANKER_MODEL_NAME",
+            "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
+        )
+        self.reranker_candidate_count = self._read_int_env("RERANKER_CANDIDATE_COUNT", 20, minimum=4, maximum=50)
         # Vektör araması her sorgu için teknik olarak bir sonuç döndürebilir.
         # Düşük skorlu sonuçları LLM'e göndermemek hem halüsinasyonu hem de
         # anlamsız sorulardaki gereksiz beklemeyi engeller.
@@ -51,6 +57,8 @@ class RagEngine:
 
         self._embedding_model = None
         self._qa_pipeline = None
+        self._reranker_model = None
+        self._reranker_error_logged = False
         self._hashing_vectorizer = HashingVectorizer(
             n_features=384,
             alternate_sign=False,
@@ -113,6 +121,7 @@ class RagEngine:
 
     def answer_question(self, document_id: str, question: str, top_k: int = 4) -> Dict[str, Any]:
         started_at = time.perf_counter()
+        retrieval_question = self._normalize_question_for_retrieval(question)
         if self._vector_store is not None:
             index_version = self._vector_store.get_profile_version(document_id)
             if index_version is not None:
@@ -133,6 +142,7 @@ class RagEngine:
                 result = self._answer_question_from_pgvector(
                     document_id=document_id,
                     question=question,
+                    retrieval_question=retrieval_question,
                     top_k=top_k,
                     document_profile=profile_record["profile"],
                     started_at=started_at,
@@ -163,7 +173,7 @@ class RagEngine:
             return cached_result
 
         ordered_result = self._answer_order_sensitive_question(
-            question=question,
+            question=retrieval_question,
             chunks=[self._source_from_chunk(chunk, 1.0) for chunk in chunks],
             document_profile=document_profile,
             top_k=top_k,
@@ -173,7 +183,7 @@ class RagEngine:
             self._cache_answer(document_id, question, top_k, index_version, ordered_result)
             return ordered_result
 
-        question_embedding = self._embed_question(question)
+        question_embedding = self._embed_question(retrieval_question)
         scores = embeddings @ question_embedding
 
         if self._is_document_overview_question(question):
@@ -185,11 +195,12 @@ class RagEngine:
             selected_sources = self._hybrid_sources_from_memory(
                 chunks=chunks,
                 dense_scores=scores,
-                question=question,
-                top_k=top_k,
+                question=retrieval_question,
+                top_k=self._retrieval_candidate_count(top_k),
             )
+            selected_sources = self._rerank_sources(retrieval_question, selected_sources, top_k)
 
-        guard_result = self._relevance_guard_result(question, selected_sources)
+        guard_result = self._relevance_guard_result(retrieval_question, selected_sources)
         if guard_result is not None:
             result = self._answer_result_from_guard(guard_result, started_at)
             self._cache_answer(document_id, question, top_k, index_version, result)
@@ -219,6 +230,14 @@ class RagEngine:
 
     def cache_status(self) -> Dict[str, Any]:
         return self.cache.status()
+
+    def reranker_status(self) -> Dict[str, Any]:
+        return {
+            "enabled": self.reranker_enabled,
+            "model": self.reranker_model_name if self.reranker_enabled else None,
+            "candidateCount": self.reranker_candidate_count,
+            "loaded": self._reranker_model is not None,
+        }
 
     def _get_cached_profile_record(self, document_id: str, index_version: str) -> Dict[str, Any] | None:
         cache_key = f"profile:{document_id}:{stable_hash(index_version)[:16]}"
@@ -280,10 +299,12 @@ class RagEngine:
     def _answer_model_cache_key(self) -> str:
         llm_key = f"ollama:{self.ollama_model}" if self.ollama_base_url and self.ollama_model else "ollama:none"
         return "|".join((
-            "engine-cache-v1",
+            "engine-cache-v3-reranker",
             f"embedding:{self.embedding_model_name}",
             f"qa:{'disabled' if self.disable_qa_model else self.qa_model_name}",
             llm_key,
+            f"reranker:{self.reranker_model_name if self.reranker_enabled else 'disabled'}",
+            f"rerankerCandidates:{self.reranker_candidate_count}",
             f"minScore:{self.min_retrieval_score}",
         ))
 
@@ -308,17 +329,154 @@ class RagEngine:
     def _normalize_cache_text(self, text: str) -> str:
         return self._normalize_whitespace(text).casefold()
 
+    def _normalize_question_for_retrieval(self, question: str) -> str:
+        corrected_question = self._correct_question_typos(question)
+        normalized = self._normalize_for_matching(corrected_question)
+        expansions = []
+        for group in self._question_alias_groups():
+            if any(self._contains_question_marker(normalized, marker) for marker in group["triggers"]):
+                expansions.extend(group["aliases"])
+
+        if self._classify_response_mode(corrected_question) == "summary":
+            expansions.extend((
+                "ozet", "konu", "ana konu", "amac", "kapsam", "icerik",
+                "ne anlatiliyor", "ne hakkinda",
+            ))
+
+        query_parts = [corrected_question]
+        if expansions:
+            query_parts.append(" ".join(dict.fromkeys(expansions)))
+        return self._normalize_whitespace(" ".join(query_parts))
+
+    def _correct_question_typos(self, question: str) -> str:
+        normalized = self._normalize_for_matching(question)
+        typo_corrections = {
+            "bulegede": "belgede",
+            "bulgede": "belgede",
+            "belgee": "belge",
+            "belgdee": "belgede",
+            "dokumanda": "dokumanda",
+            "pdfde": "pdfde",
+            "egitmler": "egitmenler",
+            "egitimler": "egitmenler",
+            "egitmnler": "egitmenler",
+            "egitmenlr": "egitmenler",
+            "egitmn": "egitmen",
+            "egitmen kimdr": "egitmen kimdir",
+            "kimdr": "kimdir",
+            "kmdir": "kimdir",
+            "anlatiliyo": "anlatiliyor",
+            "anlatiliyr": "anlatiliyor",
+            "anlatilyor": "anlatiliyor",
+            "hazirliyan": "hazirlayan",
+            "hazirlayanlar": "hazirlayanlar",
+            "sorumlusu kimdr": "sorumlusu kimdir",
+            "nerde": "nerede",
+            "nerden": "nereden",
+            "tarihi ne": "tarih nedir",
+        }
+        corrected = normalized
+        for wrong, right in typo_corrections.items():
+            corrected = re.sub(rf"\b{re.escape(wrong)}\b", right, corrected)
+        return corrected
+
+    def _question_alias_groups(self) -> List[Dict[str, tuple[str, ...]]]:
+        return [
+            {
+                "triggers": (
+                    "ozet", "konu", "hakkinda", "ne anlatiliyor", "ne anlatiyor",
+                    "icerik", "icerigi", "neler var", "neler yer aliyor", "nedir",
+                ),
+                "aliases": (
+                    "ozet", "konu", "ana konu", "icerik", "amac", "kapsam",
+                    "ne anlatiliyor", "ne hakkinda", "belge", "dokuman",
+                ),
+            },
+            {
+                "triggers": (
+                    "yazar", "yazarlar", "sahip", "sahibi", "hazirlayan",
+                    "hazirlayanlar", "sorumlu", "sorumlusu", "egitmen",
+                    "egitmenler", "egitimci", "egitimciler", "egitimi veren",
+                    "ders sorumlusu", "hoca", "hocasi", "veren kim", "kim verdi",
+                ),
+                "aliases": (
+                    "egitmen", "egitmenler", "egitimci", "egitimciler",
+                    "hazirlayan", "hazirlayanlar", "yazar", "yazarlar",
+                    "sorumlu", "sorumlusu", "ders sorumlusu", "hoca",
+                    "gorevli", "kisi", "kisiler",
+                ),
+            },
+            {
+                "triggers": (
+                    "tarih", "tarihi", "ne zaman", "baslangic", "baslama",
+                    "bitis", "sure", "kac gun", "hangi gun", "hangi tarihte",
+                ),
+                "aliases": (
+                    "tarih", "baslangic tarihi", "bitis tarihi", "sure",
+                    "zaman", "gun", "ay", "yil", "donem",
+                ),
+            },
+            {
+                "triggers": (
+                    "nerede", "nereden", "nereye", "neresi", "hangi sehir",
+                    "sehir", "il", "adres", "konum", "lokasyon", "yer",
+                ),
+                "aliases": (
+                    "yer", "konum", "adres", "sehir", "il", "lokasyon",
+                    "nerede", "nereden", "nereye",
+                ),
+            },
+            {
+                "triggers": (
+                    "amac", "amaci", "hedef", "hedefi", "neden", "ne icin",
+                    "kapsam", "kapsami", "ne ise yarar",
+                ),
+                "aliases": (
+                    "amac", "hedef", "kapsam", "gerekce", "ne icin",
+                    "ne ise yarar", "fayda",
+                ),
+            },
+            {
+                "triggers": (
+                    "katilimci", "katilimcilar", "kimler katilabilir",
+                    "hedef kitle", "ogrenci", "ogrenciler", "kursiyer",
+                    "kursiyerler", "kime yonelik",
+                ),
+                "aliases": (
+                    "katilimci", "katilimcilar", "hedef kitle", "ogrenci",
+                    "ogrenciler", "kursiyer", "kursiyerler", "kime yonelik",
+                ),
+            },
+            {
+                "triggers": (
+                    "ucret", "fiyat", "bedel", "maliyet", "tutar", "odeme",
+                    "kac tl", "kac lira", "para",
+                ),
+                "aliases": (
+                    "ucret", "fiyat", "bedel", "maliyet", "tutar", "odeme",
+                    "tl", "lira", "para",
+                ),
+            },
+        ]
+
+    def _contains_question_marker(self, normalized_question: str, marker: str) -> bool:
+        normalized_marker = self._normalize_for_matching(marker)
+        if " " in normalized_marker:
+            return normalized_marker in normalized_question
+        return re.search(rf"\b{re.escape(normalized_marker)}\b", normalized_question) is not None
+
     def _answer_question_from_pgvector(
         self,
         document_id: str,
         question: str,
+        retrieval_question: str,
         top_k: int,
         document_profile: Dict[str, Any],
         started_at: float,
     ) -> Dict[str, Any]:
         response_mode = self._classify_response_mode(question)
         ordered_result = self._answer_order_sensitive_question(
-            question=question,
+            question=retrieval_question,
             chunks=self._vector_store.all_chunks(document_id),
             document_profile=document_profile,
             top_k=top_k,
@@ -330,10 +488,16 @@ class RagEngine:
         if response_mode == "summary":
             selected_sources = self._vector_store.initial_chunks(document_id, top_k)
         else:
-            question_embedding = self._embed_question(question)
-            selected_sources = self._vector_store.hybrid_search(document_id, question, question_embedding, top_k)
+            question_embedding = self._embed_question(retrieval_question)
+            selected_sources = self._vector_store.hybrid_search(
+                document_id,
+                retrieval_question,
+                question_embedding,
+                self._retrieval_candidate_count(top_k),
+            )
+            selected_sources = self._rerank_sources(retrieval_question, selected_sources, top_k)
 
-        guard_result = self._relevance_guard_result(question, selected_sources)
+        guard_result = self._relevance_guard_result(retrieval_question, selected_sources)
         if guard_result is not None:
             return self._answer_result_from_guard(guard_result, started_at)
 
@@ -431,6 +595,10 @@ class RagEngine:
         return "\n".join(rows)
 
     def _chunk_pages(self, pages: List[Dict[str, Any]], chunk_size: int = 1200, overlap: int = 200) -> List[Dict[str, Any]]:
+        heading_chunks = self._chunk_pages_by_headings(pages, chunk_size)
+        if heading_chunks:
+            return heading_chunks
+
         chunks = []
         chunk_index = 0
         for page in pages:
@@ -463,6 +631,95 @@ class RagEngine:
                     text="\n\n".join(current_blocks),
                 )
         return chunks
+
+    def _chunk_pages_by_headings(self, pages: List[Dict[str, Any]], chunk_size: int) -> List[Dict[str, Any]]:
+        sections = self._heading_sections(pages)
+        if len([section for section in sections if section.get("heading")]) < 3:
+            return []
+
+        chunks = []
+        chunk_index = 0
+        for section in sections:
+            text = section["text"]
+            heading = section.get("heading") or ""
+            page_number = section["pageNumber"]
+
+            if len(text) <= chunk_size:
+                chunk_index = self._append_chunk(chunks, chunk_index, page_number, text)
+                continue
+
+            body = text[len(heading):].strip() if heading and text.startswith(heading) else text
+            available_size = max(300, chunk_size - len(heading) - 2) if heading else chunk_size
+            for piece in self._split_oversized_block(body, available_size):
+                chunk_text = f"{heading}\n{piece}".strip() if heading else piece
+                chunk_index = self._append_chunk(chunks, chunk_index, page_number, chunk_text)
+
+        return chunks
+
+    def _heading_sections(self, pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        sections = []
+        current = None
+        for page in pages:
+            page_number = page["pageNumber"]
+            for line in self._page_lines(page.get("text", "")):
+                if self._is_section_heading(line):
+                    if current is not None:
+                        sections.append(current)
+                    current = {
+                        "pageNumber": page_number,
+                        "heading": line,
+                        "lines": [line],
+                    }
+                    continue
+
+                if current is None:
+                    current = {
+                        "pageNumber": page_number,
+                        "heading": "",
+                        "lines": [],
+                    }
+                current["lines"].append(line)
+
+        if current is not None:
+            sections.append(current)
+
+        return [
+            {
+                "pageNumber": section["pageNumber"],
+                "heading": section["heading"],
+                "text": "\n".join(section["lines"]).strip(),
+            }
+            for section in sections
+            if "\n".join(section["lines"]).strip()
+        ]
+
+    def _page_lines(self, text: str) -> List[str]:
+        return [
+            self._normalize_whitespace(line)
+            for line in text.splitlines()
+            if self._normalize_whitespace(line)
+        ]
+
+    def _is_section_heading(self, line: str) -> bool:
+        normalized = self._normalize_for_matching(line).strip()
+        if not normalized or len(line) > 180 or line.endswith("."):
+            return False
+        if re.match(r"^(?:madde|bolum|chapter|section)\s+[0-9ivxlcdm]+(?:\b|[.)-])", normalized):
+            return True
+        if re.match(r"^[0-9]+(?:\.[0-9]+){0,4}[.)-]?\s+\S+", normalized):
+            return True
+        if re.match(r"^[a-z]\)\s+\S+", normalized):
+            return True
+        if normalized in {
+            "amac", "kapsam", "dayanak", "tanimlar", "giris", "sonuc",
+            "egitmenler", "egitimciler", "program icerigi", "icerik",
+            "basvuru kosullari", "katilim sartlari", "degerlendirme",
+            "genel hukumler", "yururluk", "yurutme",
+        }:
+            return True
+        if len(line) <= 140 and line.rstrip().endswith(":"):
+            return True
+        return len(line) <= 140 and self._looks_like_heading(line)
 
     def _append_chunk(
         self,
@@ -709,6 +966,72 @@ class RagEngine:
             ):
                 return True
         return False
+
+    def _retrieval_candidate_count(self, top_k: int) -> int:
+        if not self.reranker_enabled:
+            return max(top_k, 1)
+        return max(top_k, self.reranker_candidate_count, 1)
+
+    def _rerank_sources(
+        self,
+        question: str,
+        sources: List[Dict[str, Any]],
+        top_k: int,
+    ) -> List[Dict[str, Any]]:
+        limit = max(top_k, 1)
+        if len(sources) <= limit:
+            return sources[:limit]
+
+        reranker = self._get_reranker_model()
+        if reranker is None:
+            return sources[:limit]
+
+        try:
+            pairs = [
+                (question, self._source_text_for_reranking(source))
+                for source in sources
+            ]
+            scores = reranker.predict(pairs, show_progress_bar=False)
+            ranked_sources = []
+            for source, score in zip(sources, scores):
+                ranked_sources.append({
+                    **source,
+                    "rerankerScore": float(score),
+                    "reranked": True,
+                })
+            return sorted(
+                ranked_sources,
+                key=lambda source: float(source.get("rerankerScore", 0.0)),
+                reverse=True,
+            )[:limit]
+        except Exception as exc:
+            self._log_reranker_error_once(f"Reranker sıralama hatası, mevcut retrieval sırası kullanılacak: {exc}")
+            return sources[:limit]
+
+    def _source_text_for_reranking(self, source: Dict[str, Any]) -> str:
+        text = str(source.get("text", ""))
+        return text[:3000]
+
+    def _get_reranker_model(self):
+        if not self.reranker_enabled:
+            return None
+        if self._reranker_model is not None:
+            return self._reranker_model
+        try:
+            from sentence_transformers import CrossEncoder
+
+            self._reranker_model = CrossEncoder(self.reranker_model_name)
+            return self._reranker_model
+        except Exception as exc:
+            self._log_reranker_error_once(f"Reranker modeli yüklenemedi, mevcut retrieval sırası kullanılacak: {exc}")
+            self._reranker_model = None
+            return None
+
+    def _log_reranker_error_once(self, message: str) -> None:
+        if self._reranker_error_logged:
+            return
+        print(message)
+        self._reranker_error_logged = True
 
     def _embed_question(self, question: str) -> np.ndarray:
         cache_key = (
@@ -1107,6 +1430,13 @@ class RagEngine:
         except ValueError:
             value = 0.10
         return min(max(value, 0.0), 1.0)
+
+    def _read_int_env(self, name: str, default_value: int, minimum: int, maximum: int) -> int:
+        try:
+            value = int(os.getenv(name, str(default_value)))
+        except ValueError:
+            value = default_value
+        return min(max(value, minimum), maximum)
 
     def _is_obvious_gibberish(self, question: str) -> bool:
         """Tek, uzun ve neredeyse sesli harfsiz rastgele dizileri ayıklar.
