@@ -66,6 +66,21 @@ Bu proje şu akışı gerçekleştirir:
 - transformers
 - scikit-learn fallback
 
+AI servisinin iç yapısı domain bazlı paketlere ayrılmıştır:
+
+- `app/`: FastAPI uygulama fabrikası, ayarlar, dependency helper'ları ve RAG orchestration.
+- `api/`: health, belge indeksleme/silme ve chat endpoint router'ları.
+- `ingestion/`: PDF/DOCX/TXT parser'ları ve belge profili çıkarımı.
+- `chunking/`: başlık ve semantik chunking mantığı.
+- `embeddings/`: embedding modeli ve embedding üretim servisi.
+- `retrieval/`: pgvector store, hibrit retrieval, reranker ve kaynak seçimi.
+- `generation/`: Ollama, QA ve extractive fallback cevap üretimi.
+- `prompts/`: LLM prompt şablonları ve prompt builder.
+- `guardrails/`: retrieval ve çıktı grounding kontrolleri.
+- `observability/`: trace, süre ölçümü ve kalite log helper'ları.
+
+`app.py`, `rag_engine.py`, `cache.py`, `vector_store.py` ve `rag/` paketi eski import uyumluluğu için ince wrapper olarak korunur. Docker entrypoint'i `app.main:app` kullanır.
+
 ### Model tarafı
 Varsayılan açık kaynak modeller:
 
@@ -238,7 +253,7 @@ cd ai-service
 python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-uvicorn app:app --host 0.0.0.0 --port 5000
+uvicorn app.main:app --host 0.0.0.0 --port 5000
 ```
 
 ### 3. Backend
