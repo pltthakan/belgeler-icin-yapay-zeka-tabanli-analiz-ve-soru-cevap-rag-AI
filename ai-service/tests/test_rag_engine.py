@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import tempfile
 import unittest
@@ -128,6 +129,47 @@ class RagEngineAnswerTests(unittest.TestCase):
             [0, 1],
         )
 
+    def test_date_query_expansion_does_not_trigger_document_order_answer(self):
+        document_id = "contract-notice-period"
+        chunks = [
+            {
+                "chunkIndex": 0,
+                "pageNumber": 1,
+                "text": "SÖZLEŞME ÖZETİ\nTaraflar hizmet kapsamı ve ödeme koşullarında mutabık kalmıştır.",
+            },
+            {
+                "chunkIndex": 1,
+                "pageNumber": 2,
+                "text": (
+                    "FESİH\nTaraflardan biri sözleşmeyi feshetmek isterse diğer tarafa "
+                    "en az 30 gün önce yazılı bildirim yapmalıdır."
+                ),
+            },
+        ]
+        embeddings = self.engine._hashing_vectorizer.transform([chunk["text"] for chunk in chunks]).toarray()
+        self.engine._embed_texts = lambda texts: self.engine._hashing_vectorizer.transform(texts).toarray()
+        self.engine.disable_qa_model = True
+        self.engine._index_path(document_id).write_text(
+            json.dumps({
+                "documentId": document_id,
+                "filename": "contract.txt",
+                "chunkCount": len(chunks),
+                "chunks": chunks,
+                "embeddings": embeddings.tolist(),
+                "documentProfile": self.engine._build_document_profile(chunks),
+            }, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        result = self.engine.answer_question(
+            document_id=document_id,
+            question="Sözleşmenin fesih bildirim süresi kaç gündür?",
+            top_k=3,
+        )
+
+        self.assertEqual(result["sources"][0]["chunkIndex"], 1)
+        self.assertIn("30 gün", result["answer"])
+
     def test_memory_hybrid_search_combines_dense_and_sparse_matches(self):
         chunks = [
             {"chunkIndex": 0, "pageNumber": 1, "text": "Bu bölüm genel eğitim bilgilerini açıklar."},
@@ -192,6 +234,22 @@ class RagEngineAnswerTests(unittest.TestCase):
 
         self.assertEqual(answer, "Adayın backend deneyimi öne çıkıyor.")
 
+    def test_generated_answer_sanitizer_repairs_pdf_unicode_artifacts(self):
+        answer = self.engine._sanitize_generated_answer(
+            "Genel Not Ortalaması + Üniversiteye Giri/uni015F Sırası teknik mülakat ba/uni015Farı puanını belirler."
+        )
+
+        self.assertEqual(
+            answer,
+            "Genel Not Ortalaması + Üniversiteye Giriş Sırası teknik mülakat başarı puanını belirler.",
+        )
+
+    def test_gano_question_expands_to_general_grade_average_terms(self):
+        retrieval_question = self.engine._normalize_question_for_retrieval("gano önemlimi başvuruda")
+
+        self.assertIn("genel not ortalamasi", retrieval_question)
+        self.assertIn("universiteye giris sirasi", retrieval_question)
+
     def test_critique_guard_rejects_claims_contradicted_by_sources(self):
         sources = [{
             "text": (
@@ -207,6 +265,28 @@ class RagEngineAnswerTests(unittest.TestCase):
 
         self.assertFalse(self.engine._is_grounded_critique(unsupported, sources))
         self.assertTrue(self.engine._is_grounded_critique(self.engine._safe_critique_answer(), sources))
+
+    def test_grounding_guard_accepts_terms_joined_during_pdf_extraction(self):
+        sources = [{
+            "text": (
+                "Kimlik doğrulamaOIDC/OAuth2, SSO, MFA. "
+                "YetkilendirmeRBAC + ABAC. "
+                "ŞifrelemeTLS everywhere, at-rest encryption."
+            )
+        }]
+        answer = (
+            "Güvenlik önlemleri arasında OIDC/OAuth2, SSO, MFA, "
+            "RBAC + ABAC yetkilendirme ve TLS şifreleme kullanılmıştır."
+        )
+
+        self.assertTrue(
+            self.engine._is_grounded_answer(
+                "güvenlik önlemleri nelerdir?",
+                answer,
+                sources,
+                "factual",
+            )
+        )
 
     def test_docx_extraction_includes_table_cells_in_document_order(self):
         document = Document()
