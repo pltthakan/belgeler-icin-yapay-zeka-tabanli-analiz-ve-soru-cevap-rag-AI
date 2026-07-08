@@ -158,7 +158,7 @@ class PgVectorStore:
                 cursor.execute(
                     """
                     WITH query AS (
-                        SELECT websearch_to_tsquery('simple', %s) AS ts_query
+                        SELECT websearch_to_tsquery('turkish', public.immutable_unaccent(%s)) AS ts_query
                     ),
                     dense AS (
                         SELECT chunk_index,
@@ -175,14 +175,20 @@ class PgVectorStore:
                         SELECT c.chunk_index,
                                c.page_number,
                                c.content,
-                               ts_rank_cd(to_tsvector('simple', c.content), query.ts_query) AS sparse_score,
+                               ts_rank_cd(
+                                   to_tsvector('turkish', public.immutable_unaccent(c.content)),
+                                   query.ts_query
+                               ) AS sparse_score,
                                ROW_NUMBER() OVER (
-                                   ORDER BY ts_rank_cd(to_tsvector('simple', c.content), query.ts_query) DESC
+                                   ORDER BY ts_rank_cd(
+                                       to_tsvector('turkish', public.immutable_unaccent(c.content)),
+                                       query.ts_query
+                                   ) DESC
                                ) AS sparse_rank
                         FROM rag_document_chunks c
                         CROSS JOIN query
                         WHERE c.document_id = %s
-                          AND query.ts_query @@ to_tsvector('simple', c.content)
+                          AND query.ts_query @@ to_tsvector('turkish', public.immutable_unaccent(c.content))
                         ORDER BY sparse_score DESC
                         LIMIT %s
                     ),
@@ -288,6 +294,19 @@ class PgVectorStore:
         with psycopg.connect(self.dsn, autocommit=True) as connection:
             with connection.cursor() as cursor:
                 cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
+                cursor.execute("CREATE EXTENSION IF NOT EXISTS unaccent")
+                cursor.execute(
+                    """
+                    CREATE OR REPLACE FUNCTION public.immutable_unaccent(text)
+                    RETURNS text
+                    LANGUAGE sql
+                    IMMUTABLE
+                    PARALLEL SAFE
+                    AS $$
+                        SELECT public.unaccent('public.unaccent', $1)
+                    $$;
+                    """
+                )
                 cursor.execute(
                     f"""
                     CREATE TABLE IF NOT EXISTS rag_document_profiles (
@@ -328,8 +347,9 @@ class PgVectorStore:
                 )
                 cursor.execute(
                     """
-                    CREATE INDEX IF NOT EXISTS rag_document_chunks_content_fts_idx
-                    ON rag_document_chunks USING gin (to_tsvector('simple', content))
+                    CREATE INDEX IF NOT EXISTS rag_document_chunks_content_tr_fts_idx
+                    ON rag_document_chunks
+                    USING gin (to_tsvector('turkish', public.immutable_unaccent(content)))
                     """
                 )
         self._schema_ready = True
