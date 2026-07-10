@@ -13,11 +13,14 @@ import com.hakan.rag.util.CurrentUserService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.client.RestTemplate;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/admin")
@@ -27,19 +30,25 @@ public class AdminAccessController {
     private final UserRepository userRepository;
     private final AuditLogRepository auditLogRepository;
     private final LlmTraceRepository llmTraceRepository;
+    private final RestTemplate restTemplate;
+    private final String aiBaseUrl;
 
     public AdminAccessController(
             CurrentUserService currentUserService,
             DepartmentRepository departmentRepository,
             UserRepository userRepository,
             AuditLogRepository auditLogRepository,
-            LlmTraceRepository llmTraceRepository
+            LlmTraceRepository llmTraceRepository,
+            RestTemplate restTemplate,
+            @Value("${app.ai.base-url}") String aiBaseUrl
     ) {
         this.currentUserService = currentUserService;
         this.departmentRepository = departmentRepository;
         this.userRepository = userRepository;
         this.auditLogRepository = auditLogRepository;
         this.llmTraceRepository = llmTraceRepository;
+        this.restTemplate = restTemplate;
+        this.aiBaseUrl = aiBaseUrl;
     }
 
     @PostMapping("/departments")
@@ -127,6 +136,67 @@ public class AdminAccessController {
         ));
     }
 
+    @GetMapping("/cache-summary")
+    public ResponseEntity<CacheSummaryResponse> cacheSummary() {
+        currentUserService.requireAdmin();
+        return ResponseEntity.ok(loadCacheSummary());
+    }
+
+    @SuppressWarnings("unchecked")
+    private CacheSummaryResponse loadCacheSummary() {
+        try {
+            Map<String, Object> health = restTemplate.getForObject(aiBaseUrl + "/api/health", Map.class);
+            Map<?, ?> cache = mapValue(health, "cache");
+            Map<?, ?> ttlSeconds = mapValue(cache, "ttlSeconds");
+            Map<?, ?> metrics = mapValue(cache, "metrics");
+            return new CacheSummaryResponse(
+                    "UP",
+                    booleanValue(cache.get("configured")),
+                    booleanValue(cache.get("enabled")),
+                    stringValue(cache.get("prefix")),
+                    longValue(ttlSeconds.get("answer")),
+                    longValue(ttlSeconds.get("embedding")),
+                    longValue(ttlSeconds.get("profile")),
+                    longValue(metrics.get("hits")),
+                    longValue(metrics.get("misses")),
+                    longValue(metrics.get("reads")),
+                    roundOneDecimal(doubleValue(metrics.get("hitRate"))),
+                    longValue(metrics.get("sets")),
+                    longValue(metrics.get("deletes")),
+                    longValue(metrics.get("deletePatterns")),
+                    longValue(metrics.get("errors")),
+                    null
+            );
+        } catch (Exception exception) {
+            return new CacheSummaryResponse(
+                    "DOWN",
+                    false,
+                    false,
+                    "",
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    exception.getMessage()
+            );
+        }
+    }
+
+    private static Map<?, ?> mapValue(Map<?, ?> source, String key) {
+        if (source == null) {
+            return Map.of();
+        }
+        Object value = source.get(key);
+        return value instanceof Map<?, ?> map ? map : Map.of();
+    }
+
     private static long longValue(Object value) {
         return value instanceof Number number ? number.longValue() : 0;
     }
@@ -137,6 +207,14 @@ public class AdminAccessController {
 
     private static double roundOneDecimal(double value) {
         return Math.round(value * 10.0) / 10.0;
+    }
+
+    private static boolean booleanValue(Object value) {
+        return value instanceof Boolean bool && bool;
+    }
+
+    private static String stringValue(Object value) {
+        return value == null ? "" : value.toString();
     }
 
     public record CreateDepartmentRequest(@NotBlank String name) {}
@@ -171,4 +249,8 @@ public class AdminAccessController {
     public record QualitySummaryResponse(long totalRequests, long successfulRequests, long failedRequests,
                                          double successRate, double averageResponseTimeMs, long ollamaResponses,
                                          long fallbackResponses) {}
+    public record CacheSummaryResponse(String status, boolean configured, boolean enabled, String prefix,
+                                       long answerTtlSeconds, long embeddingTtlSeconds, long profileTtlSeconds,
+                                       long hits, long misses, long reads, double hitRate, long sets, long deletes,
+                                       long deletePatterns, long errors, String error) {}
 }
