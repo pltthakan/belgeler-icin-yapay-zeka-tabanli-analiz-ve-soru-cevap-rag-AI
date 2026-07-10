@@ -8,6 +8,7 @@ export default function Admin() {
   const [auditLogs, setAuditLogs] = useState([])
   const [traces, setTraces] = useState([])
   const [qualitySummary, setQualitySummary] = useState(null)
+  const [cacheSummary, setCacheSummary] = useState(null)
   const [departmentName, setDepartmentName] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -16,18 +17,20 @@ export default function Admin() {
     setLoading(true)
     setError('')
     try {
-      const [departmentRes, userRes, auditRes, traceRes, qualityRes] = await Promise.all([
+      const [departmentRes, userRes, auditRes, traceRes, qualityRes, cacheRes] = await Promise.all([
         api.get('/api/admin/departments'),
         api.get('/api/admin/users'),
         api.get('/api/admin/audit-logs'),
         api.get('/api/admin/llm-traces'),
-        api.get('/api/admin/quality-summary')
+        api.get('/api/admin/quality-summary'),
+        api.get('/api/admin/cache-summary')
       ])
       setDepartments(departmentRes.data)
       setUsers(userRes.data)
       setAuditLogs(auditRes.data)
       setTraces(traceRes.data)
       setQualitySummary(qualityRes.data)
+      setCacheSummary(cacheRes.data)
     } catch (err) {
       setError(getErrorMessage(err))
     } finally {
@@ -89,6 +92,50 @@ export default function Admin() {
             <MetricCard label="Ort. yanıt süresi" value={`${formatMetric(qualitySummary.averageResponseTimeMs)} ms`} detail="Süre bilgisi olan kayıtlar" />
             <MetricCard label="Ollama yanıtı" value={formatCount(qualitySummary.ollamaResponses)} detail="Yerel LLM ile üretilen" />
             <MetricCard label="Fallback yanıtı" value={formatCount(qualitySummary.fallbackResponses)} detail="QA / extractive / retrieval" />
+          </div>
+        )}
+      </section>
+
+      <section className="panel quality-panel">
+        <div className="section-title">
+          <div>
+            <h2>Redis cache gözlemlenebilirliği</h2>
+            <p className="muted">AI servisinin Redis cevap, profil ve embedding cache metriklerinden alınır.</p>
+          </div>
+          <button className="secondary" onClick={load}>Yenile</button>
+        </div>
+        {loading || !cacheSummary ? <p>Cache metrikleri yükleniyor...</p> : (
+          <div className="quality-grid">
+            <MetricCard
+              label="Redis durumu"
+              value={cacheSummary.enabled ? 'Aktif' : cacheSummary.status === 'UP' ? 'Pasif' : 'DOWN'}
+              detail={cacheSummary.error || `prefix: ${cacheSummary.prefix || '-'}`}
+            />
+            <MetricCard
+              label="Cache hit rate"
+              value={`%${formatMetric(cacheSummary.hitRate)}`}
+              detail={`${formatCount(cacheSummary.hits)} hit · ${formatCount(cacheSummary.misses)} miss`}
+            />
+            <MetricCard
+              label="Cache okumaları"
+              value={formatCount(cacheSummary.reads)}
+              detail={`${formatCount(cacheSummary.sets)} yazma`}
+            />
+            <MetricCard
+              label="Invalidation"
+              value={formatCount(cacheSummary.deletePatterns)}
+              detail={`${formatCount(cacheSummary.deletes)} key silindi`}
+            />
+            <MetricCard
+              label="Yanıt TTL"
+              value={formatTtl(cacheSummary.answerTtlSeconds)}
+              detail={`Embedding ${formatTtl(cacheSummary.embeddingTtlSeconds)} · Profil ${formatTtl(cacheSummary.profileTtlSeconds)}`}
+            />
+            <MetricCard
+              label="Cache hataları"
+              value={formatCount(cacheSummary.errors)}
+              detail="Redis okuma/yazma/silme hataları"
+            />
           </div>
         )}
       </section>
@@ -172,4 +219,13 @@ function formatCount(value) {
 
 function formatMetric(value) {
   return new Intl.NumberFormat('tr-TR', { maximumFractionDigits: 1 }).format(value || 0)
+}
+
+function formatTtl(seconds) {
+  const value = Number(seconds) || 0
+  if (value <= 0) return '-'
+  if (value % 86400 === 0) return `${value / 86400} gün`
+  if (value % 3600 === 0) return `${value / 3600} saat`
+  if (value % 60 === 0) return `${value / 60} dk`
+  return `${value} sn`
 }

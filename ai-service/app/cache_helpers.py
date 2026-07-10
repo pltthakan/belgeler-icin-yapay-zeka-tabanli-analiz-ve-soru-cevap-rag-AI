@@ -55,6 +55,14 @@ class CacheMixin:
     ) -> None:
         if not isinstance(result, dict) or "answer" not in result:
             return
+        trace = result.get("trace")
+        if not isinstance(trace, dict):
+            trace = {}
+        result["trace"] = {
+            **trace,
+            "cacheHit": False,
+            "cacheProvider": "redis" if self.cache.enabled else "disabled",
+        }
         cache_key = self._answer_cache_key(document_id, question, top_k, index_version)
         self.cache.set_json(cache_key, result, self.cache.answer_ttl_seconds)
 
