@@ -143,6 +143,19 @@ Redis cache gözlemlenebilirliği:
 - Yönetim ekranındaki **Redis cache gözlemlenebilirliği** paneli admin kullanıcıya cache hit rate, okuma/yazma, invalidation ve TTL metriklerini gösterir.
 - Redis Insight arayüzü Compose ile `http://localhost:5540` üzerinde çalışır ve cache key'lerini görsel olarak incelemek için kullanılabilir.
 
+Redis cache gözlemlenebilirliği yönetim panelinden izlenebilir:
+
+<img width="1285" height="769" alt="Ekran Resmi 2026-07-10 11 54 54" src="https://github.com/user-attachments/assets/b5deb65e-e678-4692-afc3-beea50019fcc" />
+
+Yönetim paneli Redis bağlantı durumunu, cache hit rate değerini, okuma/yazma sayılarını, invalidation metriklerini, TTL ayarlarını ve cache hatalarını gösterir.
+
+Redis Insight üzerinden RAG cache key'leri incelenebilir:
+
+<img width="1026" height="427" alt="User attachment1" src="https://github.com/user-attachments/assets/f33ac9a8-3915-4070-88bb-0985c436f72d" />
+
+Redis key'leri kullanım amacına göre gruplanır: `rag:answer` RAG cevap cache'i, `rag:embedding` soru embedding cache'i, `rag:profile` belge profil cache'i için kullanılır.
+
+
 ### Reranker
 
 AI service, pgvector/hybrid search ile daha geniş bir aday kaynak kümesi getirir ve opsiyonel reranker modeliyle en alakalı kaynakları yeniden sıralar.
