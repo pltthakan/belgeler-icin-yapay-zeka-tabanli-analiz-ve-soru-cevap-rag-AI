@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, Dict, List
+
+
+logger = logging.getLogger("uvicorn.error").getChild("rag.guard")
 
 
 class AnswerServiceMixin:
@@ -46,11 +50,56 @@ class AnswerServiceMixin:
         )
         if generated_result:
             answer, generation = generated_result
+            evidence = self._evidence_support_decision(question, sources)
+            if self._is_no_answer_response(answer):
+                if evidence["supported"]:
+                    supported_answer = self._answer_from_supported_evidence(question, sources, evidence)
+                    self._log_fallback_decision(
+                        reason="model-no-answer-despite-supported-evidence",
+                        evidence=evidence,
+                        generation=generation,
+                    )
+                    return supported_answer, {
+                        **generation,
+                        "provider": "evidence-supported-fallback",
+                        "guardReason": "model-no-answer-despite-supported-evidence",
+                        "evidenceDecision": evidence,
+                    }
+                self._log_fallback_decision(
+                    reason="no-retrieved-chunk-supports-main-claim",
+                    evidence=evidence,
+                    generation=generation,
+                )
+                return answer, {
+                    **generation,
+                    "guardReason": "no-retrieved-chunk-supports-main-claim",
+                    "evidenceDecision": evidence,
+                }
+
             if not self._is_grounded_answer(question, answer, sources, response_mode):
+                if evidence["supported"]:
+                    supported_answer = self._answer_from_supported_evidence(question, sources, evidence)
+                    self._log_fallback_decision(
+                        reason="unsupported-generation-replaced-by-supported-evidence",
+                        evidence=evidence,
+                        generation=generation,
+                    )
+                    return supported_answer, {
+                        **generation,
+                        "provider": "evidence-supported-fallback",
+                        "guardReason": "unsupported-generation-replaced-by-supported-evidence",
+                        "evidenceDecision": evidence,
+                    }
+                self._log_fallback_decision(
+                    reason="unsupported-generated-answer",
+                    evidence=evidence,
+                    generation=generation,
+                )
                 return self._out_of_scope_answer(), {
                     **generation,
                     "provider": "answer-grounding-guard",
                     "guardReason": "unsupported-generated-answer",
+                    "evidenceDecision": evidence,
                 }
             return answer, generation
 
@@ -155,6 +204,50 @@ class AnswerServiceMixin:
         if process_parts:
             sentences.append("; ".join(process_parts) + ".")
         return " ".join(sentences)
+
+    def _answer_from_supported_evidence(
+        self,
+        question: str,
+        sources: List[Dict[str, Any]],
+        evidence: Dict[str, Any],
+    ) -> str:
+        percentages = evidence.get("matchedPercentages") or []
+        relations = set(evidence.get("matchedRelations") or [])
+        normalized_question = self._normalize_for_matching(question)
+        if percentages and "discount" in relations and "kontenjan" in normalized_question:
+            percentage = percentages[0]
+            prefix = "YKS'de " if "yks" in normalized_question else ""
+            return (
+                f"Belgeye göre {prefix}%{percentage} indirimli kontenjana yerleşen öğrenci "
+                f"%{percentage} öğrenim ücreti indirimi alır."
+            )
+
+        source_index = evidence.get("sourceIndex")
+        if isinstance(source_index, int) and 0 <= source_index < len(sources):
+            source_text = str(sources[source_index].get("text", ""))
+        else:
+            source_text = "\n".join(str(source.get("text", "")) for source in sources[:3])
+        passage = self._extract_relevant_passage(question, source_text)
+        return f"Belgeye göre: {passage}"
+
+    def _log_fallback_decision(
+        self,
+        reason: str,
+        evidence: Dict[str, Any],
+        generation: Dict[str, Any],
+    ) -> None:
+        logger.info(
+            "RAG fallback decision reason=%s supported=%s provider=%s sourceIndex=%s "
+            "chunkIndex=%s percentages=%s entities=%s relations=%s",
+            reason,
+            evidence.get("supported"),
+            generation.get("provider"),
+            evidence.get("sourceIndex"),
+            evidence.get("chunkIndex"),
+            evidence.get("matchedPercentages"),
+            evidence.get("matchedEntities"),
+            evidence.get("matchedRelations"),
+        )
 
     def _extract_engineering_departments(self, context: str) -> List[str]:
         departments = []
