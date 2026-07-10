@@ -288,6 +288,100 @@ class RagEngineAnswerTests(unittest.TestCase):
             )
         )
 
+    def test_evidence_guard_accepts_exact_percentage_entity_and_relation_match(self):
+        sources = [{
+            "chunkIndex": 12,
+            "text": (
+                "YKS indirimli kontenjanlar: İlgili yılın YKS kılavuzunda burslu ve ücretlinin "
+                "dışında, %50 veya %25 indirimli kontenjanlardır."
+            ),
+        }]
+
+        decision = self.engine._evidence_support_decision(
+            "YKS'de %50 indirimli kontenjana yerleşen öğrenci hangi indirimi alır?",
+            sources,
+        )
+
+        self.assertTrue(decision["supported"])
+        self.assertEqual(decision["reason"], "exact-percentage-entity-relation-match")
+        self.assertEqual(decision["chunkIndex"], 12)
+        self.assertEqual(decision["matchedPercentages"], ["50"])
+        self.assertIn("yks", decision["matchedEntities"])
+        self.assertIn("discount", decision["matchedRelations"])
+
+    def test_evidence_guard_rejects_same_percentage_for_unrelated_entity(self):
+        sources = [{
+            "chunkIndex": 20,
+            "text": "Engelli indirimi: Engel oranı %40 ve üzerinde olan öğrencilere %50 indirim uygulanır.",
+        }]
+
+        decision = self.engine._evidence_support_decision(
+            "YKS'de %50 indirimli kontenjana yerleşen öğrenci hangi indirimi alır?",
+            sources,
+        )
+
+        self.assertFalse(decision["supported"])
+        self.assertEqual(decision["reason"], "percentage-without-entity-relation-support")
+
+    def test_model_no_answer_is_replaced_when_retrieved_evidence_supports_claim(self):
+        question = "YKS'de %50 indirimli kontenjana yerleşen öğrenci hangi indirimi alır?"
+        sources = [{
+            "chunkIndex": 12,
+            "text": (
+                "YKS indirimli kontenjanlar: İlgili yılın YKS kılavuzunda burslu ve ücretlinin "
+                "dışında, %50 veya %25 indirimli kontenjanlardır."
+            ),
+        }]
+        generation = {
+            "provider": "ollama",
+            "model": "qwen3:8b",
+            "responseMode": "factual",
+            "prompt": "test",
+        }
+
+        with patch.object(
+            self.engine,
+            "_answer_with_ollama",
+            return_value=("Bu bilgi belgede yer almıyor.", generation),
+        ):
+            with self.assertLogs("uvicorn.error.rag.guard", level="INFO") as logs:
+                answer, result_generation = self.engine._build_answer_result(question, sources, {})
+
+        self.assertEqual(
+            answer,
+            "Belgeye göre YKS'de %50 indirimli kontenjana yerleşen öğrenci %50 öğrenim ücreti indirimi alır.",
+        )
+        self.assertEqual(result_generation["provider"], "evidence-supported-fallback")
+        self.assertEqual(
+            result_generation["guardReason"],
+            "model-no-answer-despite-supported-evidence",
+        )
+        self.assertIn("exact-percentage-entity-relation-match", str(result_generation["evidenceDecision"]))
+        self.assertIn("model-no-answer-despite-supported-evidence", " ".join(logs.output))
+
+    def test_no_answer_is_allowed_only_without_supporting_evidence(self):
+        question = "YKS'de %50 indirimli kontenjana yerleşen öğrenci hangi indirimi alır?"
+        sources = [{"chunkIndex": 1, "text": "Yatay geçiş başvuruları akademik takvimde ilan edilir."}]
+        generation = {
+            "provider": "ollama",
+            "model": "qwen3:8b",
+            "responseMode": "factual",
+            "prompt": "test",
+        }
+
+        with patch.object(
+            self.engine,
+            "_answer_with_ollama",
+            return_value=("Bu bilgi belgede yer almıyor.", generation),
+        ):
+            answer, result_generation = self.engine._build_answer_result(question, sources, {})
+
+        self.assertEqual(answer, "Bu bilgi belgede yer almıyor.")
+        self.assertEqual(
+            result_generation["guardReason"],
+            "no-retrieved-chunk-supports-main-claim",
+        )
+
     def test_docx_extraction_includes_table_cells_in_document_order(self):
         document = Document()
         document.add_paragraph("Başlık")
