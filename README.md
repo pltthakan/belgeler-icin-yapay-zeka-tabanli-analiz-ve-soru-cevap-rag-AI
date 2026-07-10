@@ -158,9 +158,15 @@ Retry gecikmesi `DOCUMENT_PROCESSING_RETRY_DELAY_MS`, maksimum deneme sayısı `
 
 > Daha önce oluşturulmuş kalıcı `document-processing.queue` kuyruğunda DLX argümanları bulunmaz. Mevcut RabbitMQ volume'u kullanılıyorsa, bekleyen iş olmadığını doğruladıktan sonra bu kuyruğu bir kez silip backend ve worker'ı yeniden başlatmak gerekir; uygulamalar kuyruğu yeni DLQ ayarlarıyla tekrar oluşturur.
 
-Asenkron belge alımı için RabbitMQ topolojisi:
 
-<img width="1470" height="664" alt="RabbitMQ document ingestion queues with retry and dead-letter queue" src="https://github.com/user-attachments/assets/769114a0-6ee3-4e66-bf56-bb7a91e5a659" />
+Asenkron belge işleme için RabbitMQ topolojisi ve DLQ akışı:
+
+<img width="1458" height="507" alt="RabbitMQ dead-letter queue after failed document ingestion retries" src="https://github.com/user-attachments/assets/18a65d82-6aae-4c32-a4ac-00187a3e7052" />
+
+AI servisi kapatılarak simüle edilen hata sonrası başarısız doküman işleme işi retry denemelerinden sonra `document-processing.dlq` kuyruğuna taşınır.
+
+
+
 
 
 ### RAG guardrail katmanı
@@ -353,17 +359,3 @@ private-document-rag-ai/
 └── README.md
 ```
 
-## CV'ye yazılabilecek proje açıklaması
-
-**Kurumsal Belge Analizi ve Soru-Cevap Platformu — RAG AI**
-
-- React, Spring Boot ve Python FastAPI kullanarak özel PDF/DOCX/TXT belgeleri üzerinde çalışan RAG tabanlı soru-cevap platformu geliştirdim.
-- Belge yükleme, metin çıkarma, chunking, embedding üretimi, vektör benzerlik araması ve kaynaklı cevap üretimi süreçlerini uçtan uca tasarladım.
-- Spring Security JWT ile rol/departman bazlı belge erişim kontrolü sağladım; PostgreSQL üzerinde kullanıcı, belge, chat geçmişi, audit log ve LLM trace kayıtlarını yönettim.
-- JSON yerine pgvector üzerinde HNSW vektör araması, yeniden indeksleme ve kaynak bazlı RAG gözlemlenebilirliği kurdum.
-- Açık kaynak sentence-transformers ve transformers modelleriyle OpenAI API kullanmadan belgeye dayalı cevap üretim akışı oluşturdum.
-
-## Önemli notlar
-
-- Bu proje çalışır bir RAG temelidir; production geçişinde migration aracı (Flyway/Liquibase), object storage, şifreleme, merkezi loglama ve retention politikası eklenmelidir.
-- Büyük dosyalar ve yüksek trafik için indeksleme kuyruğa alınmalı; object storage ve asenkron worker yapısı kullanılmalıdır.
