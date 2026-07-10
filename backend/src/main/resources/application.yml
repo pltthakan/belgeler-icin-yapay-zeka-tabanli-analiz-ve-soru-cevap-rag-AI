@@ -36,5 +36,12 @@ app:
       exchange: ${DOCUMENT_PROCESSING_EXCHANGE:document-processing.exchange}
       queue: ${DOCUMENT_PROCESSING_QUEUE:document-processing.queue}
       routing-key: ${DOCUMENT_PROCESSING_ROUTING_KEY:document-processing}
+      retry-exchange: ${DOCUMENT_PROCESSING_RETRY_EXCHANGE:document-processing.retry.exchange}
+      retry-queue: ${DOCUMENT_PROCESSING_RETRY_QUEUE:document-processing.retry.queue}
+      retry-routing-key: ${DOCUMENT_PROCESSING_RETRY_ROUTING_KEY:document-processing.retry}
+      retry-delay-ms: ${DOCUMENT_PROCESSING_RETRY_DELAY_MS:30000}
+      dead-letter-exchange: ${DOCUMENT_PROCESSING_DEAD_LETTER_EXCHANGE:document-processing.dlx}
+      dead-letter-queue: ${DOCUMENT_PROCESSING_DEAD_LETTER_QUEUE:document-processing.dlq}
+      dead-letter-routing-key: ${DOCUMENT_PROCESSING_DEAD_LETTER_ROUTING_KEY:document-processing.dead}
   upload-dir: ${APP_UPLOAD_DIR:uploads}
   bootstrap-admin-email: ${APP_BOOTSTRAP_ADMIN_EMAIL:}

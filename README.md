@@ -150,9 +150,13 @@ overlap'li semantik chunking yöntemine geri döner.
 
 ### Asenkron belge işleme
 
-Belge yükleme ve yeniden indeksleme işlemleri HTTP isteği içinde tamamlanmaz. Backend dosyayı `/app/uploads` altına kaydeder, belgeyi `PROCESSING` durumuna alır ve RabbitMQ'daki `document-processing.queue` kuyruğuna bir iş mesajı gönderir. `document-worker` servisi bu işi tüketir, aynı Docker volume'u üzerinden dosyaya erişir, AI servisini çağırır ve işlem tamamlandığında belge durumunu `READY` veya `FAILED` olarak günceller.
+Belge yükleme ve yeniden indeksleme işlemleri HTTP isteği içinde tamamlanmaz. Backend dosyayı `/app/uploads` altına kaydeder, belgeyi `PROCESSING` durumuna alır ve RabbitMQ'daki `document-processing.queue` kuyruğuna bir iş mesajı gönderir. `document-worker` servisi bu işi tüketir, aynı Docker volume'u üzerinden dosyaya erişir ve AI servisini çağırır.
 
-Bu yapı büyük PDF yüklemelerinde HTTP timeout riskini azaltır. Worker eşzamanlılığı Compose ortamında varsayılan olarak `DOCUMENT_WORKER_CONCURRENCY=1` ve `DOCUMENT_WORKER_MAX_CONCURRENCY=2` ile sınırlıdır; böylece embedding işlemleri AI servisini aşırı yüklemez.
+Bağlantı hataları, timeout, HTTP `408`, `425`, `429`, `5xx` ve geçici veritabanı hataları `document-processing.retry.queue` üzerinden varsayılan olarak 30 saniye arayla en fazla 3 kez yeniden denenir. Retry sayısı mesajın `x-retry-count` header'ında taşınır. Kalıcı hatalar ve retry limiti dolan mesajlar `document-processing.dlq` kuyruğuna gönderilir. Yeni ingestion başarısızsa belge `FAILED` olur; daha önce `READY` olan bir belgenin reindex işlemi başarısızsa kullanılabilir eski indeks korunur ve belge `READY` kalır.
+
+Retry gecikmesi `DOCUMENT_PROCESSING_RETRY_DELAY_MS`, maksimum deneme sayısı `DOCUMENT_PROCESSING_MAX_RETRIES` ile değiştirilebilir. Worker eşzamanlılığı Compose ortamında varsayılan olarak `DOCUMENT_WORKER_CONCURRENCY=1` ve `DOCUMENT_WORKER_MAX_CONCURRENCY=2` ile sınırlıdır; böylece embedding işlemleri AI servisini aşırı yüklemez.
+
+> Daha önce oluşturulmuş kalıcı `document-processing.queue` kuyruğunda DLX argümanları bulunmaz. Mevcut RabbitMQ volume'u kullanılıyorsa, bekleyen iş olmadığını doğruladıktan sonra bu kuyruğu bir kez silip backend ve worker'ı yeniden başlatmak gerekir; uygulamalar kuyruğu yeni DLQ ayarlarıyla tekrar oluşturur.
 
 ### RAG guardrail katmanı
 
