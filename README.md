@@ -158,6 +158,11 @@ Retry gecikmesi `DOCUMENT_PROCESSING_RETRY_DELAY_MS`, maksimum deneme sayısı `
 
 > Daha önce oluşturulmuş kalıcı `document-processing.queue` kuyruğunda DLX argümanları bulunmaz. Mevcut RabbitMQ volume'u kullanılıyorsa, bekleyen iş olmadığını doğruladıktan sonra bu kuyruğu bir kez silip backend ve worker'ı yeniden başlatmak gerekir; uygulamalar kuyruğu yeni DLQ ayarlarıyla tekrar oluşturur.
 
+Asenkron belge alımı için RabbitMQ topolojisi:
+
+<img width="1470" height="664" alt="RabbitMQ document ingestion queues with retry and dead-letter queue" src="https://github.com/user-attachments/assets/769114a0-6ee3-4e66-bf56-bb7a91e5a659" />
+
+
 ### RAG guardrail katmanı
 
 AI servisi, belge dışı sorularda LLM'i doğrudan çalıştırmaz. Önce retrieval guard ile sorunun seçilen kaynak parçalarıyla ilişkisi kontrol edilir; genel bilgi veya alakasız sorular standart güvenli cevapla döner. Ollama etkinse cevap üretimi sıkı bir belge-bağlam prompt'u ile yapılır ve üretilen cevap tekrar kaynak terimleriyle doğrulanır. Kaynak dışı bilgi eklendiği tespit edilirse cevap iptal edilip "Bu bilgi belgede yer almıyor" fallback'i döndürülür.
