@@ -29,6 +29,15 @@ class AnswerServiceMixin:
             }
 
         response_mode = self._classify_response_mode(question)
+        application_answer = self._answer_application_requirement_question(question, sources)
+        if application_answer is not None:
+            return application_answer, {
+                "provider": "application-requirements-structure",
+                "model": None,
+                "responseMode": response_mode,
+                "prompt": None,
+            }
+
         generated_result = self._answer_with_ollama(
             question=question,
             sources=sources,
@@ -93,13 +102,83 @@ class AnswerServiceMixin:
 
         # Model kullanılamadığında ham 900 karakterlik chunk döndürmek yerine,
         # soruyla en fazla kesişen kısa cümleleri seç.
-        short_text = self._extract_relevant_passage(question, sources[0]["text"])
+        combined_sources = "\n".join(str(source.get("text", "")) for source in sources[:3])
+        short_text = self._extract_relevant_passage(question, combined_sources)
         return f"Belgeye göre: {short_text}", {
             "provider": "extractive-fallback",
             "model": None,
             "responseMode": response_mode,
             "prompt": None,
         }
+
+    def _answer_application_requirement_question(
+        self,
+        question: str,
+        sources: List[Dict[str, Any]],
+    ) -> str | None:
+        normalized_question = self._normalize_for_matching(question)
+        if "basvur" not in normalized_question or not any(
+            marker in normalized_question for marker in ("sart", "kriter", "kosul")
+        ):
+            return None
+
+        context = "\n".join(str(source.get("text", "")) for source in sources)
+        normalized_context = self._normalize_for_matching(context)
+        if "aday muhendis" not in normalized_context:
+            return None
+
+        departments = self._extract_engineering_departments(context)
+        class_requirement = self._extract_student_class_requirement(context)
+        has_exam_process = all(
+            marker in normalized_context
+            for marker in ("genel yetenek", "ingilizce", "teknik mulakat")
+        )
+        has_gpa_rule = "genel not ortalamasi" in normalized_context and "universiteye giris sirasi" in normalized_context
+
+        if not any((departments, class_requirement, has_exam_process, has_gpa_rule)):
+            return None
+
+        sentences = []
+        if class_requirement:
+            sentences.append(f"Belgeye göre {class_requirement} başvurabilir.")
+        if departments:
+            sentences.append(f"Uygun bölümler: {', '.join(departments)}.")
+        process_parts = []
+        if has_gpa_rule:
+            process_parts.append(
+                "Genel Not Ortalaması + (10.000 / Üniversiteye Giriş Sırası) kriteri teknik uzmanlık sınavı gerekliliğini belirler"
+            )
+        if has_exam_process:
+            process_parts.append(
+                "süreç Genel Yetenek ve İngilizce sınavı, teknik mülakat, kurul mülakatı ve göreve başlama onayıyla ilerler"
+            )
+        if process_parts:
+            sentences.append("; ".join(process_parts) + ".")
+        return " ".join(sentences)
+
+    def _extract_engineering_departments(self, context: str) -> List[str]:
+        departments = []
+        for raw_line in context.splitlines():
+            line = self._normalize_whitespace(raw_line).strip(" ,-")
+            if not line or len(line) > 80:
+                continue
+            if "Mühendisliği" not in line and "Muhendisligi" not in line:
+                continue
+            if line.lower().startswith(("aday ", "hangi ", "staj", "program")):
+                continue
+            if line not in departments:
+                departments.append(line)
+        return departments[:8]
+
+    def _extract_student_class_requirement(self, context: str) -> str | None:
+        normalized_context = self._normalize_for_matching(context)
+        if re.search(r"(?:^|\D)3\s+ve\s+\.?4s?\s+inif", normalized_context):
+            return "tüm üniversitelerin 3. ve 4. sınıf mühendislik öğrencileri"
+        if re.search(r"(?:^|\D)3\s+ve\s+4\s+sinif", normalized_context):
+            return "tüm üniversitelerin 3. ve 4. sınıf mühendislik öğrencileri"
+        if "4 sinifta ogrenim goren muhendislik ogrencileri" in normalized_context:
+            return "4. sınıfta öğrenim gören mühendislik öğrencileri"
+        return None
 
     def _sanitize_generated_answer(self, answer: str) -> str:
         """Modelin kullanıcı arayüzünde zaten bulunan cevap/kaynak etiketlerini temizler."""
