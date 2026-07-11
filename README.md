@@ -12,8 +12,9 @@ Bu proje şu akışı gerçekleştirir:
 6. Worker işlem sonucuna göre belge durumunu `READY` veya `FAILED` olarak günceller.
 7. Kullanıcı belge hakkında soru sorar.
 8. FastAPI servisi soru türüne göre belge profilini veya en alakalı kaynak parçalarını seçer; yapılandırılmışsa yerel LLM ile, değilse QA/extractive fallback ile belgeye dayalı cevap üretir.
-9. Spring Boot cevabı ve kaynakları chat geçmişine; seçilen chunk’ları, prompt’u, model cevabını, süreyi ve hatayı LLM çalışma izine kaydeder.
-10. React arayüz cevapları ve kaynak parçaları gösterir.
+9. Üretilen cevap kullanıcıya gönderilmeden önce iddialara ayrılır; yüzdeler, tarihler, tutarlar, süreler, sayılar, varlıklar ve ilişkiler retrieval kaynaklarıyla doğrulanır. Desteklenmeyen veya soruyla çelişen cevap engellenir.
+10. Spring Boot cevabı ve kaynakları chat geçmişine; seçilen chunk’ları, prompt’u, model cevabını, süreyi ve hatayı LLM çalışma izine kaydeder. AI servisinin response trace'i ayrıca doğrulama kararını taşır.
+11. React arayüz cevapları ve kaynak parçaları gösterir.
 
 ## Mimari
 
@@ -77,7 +78,7 @@ AI servisinin iç yapısı domain bazlı paketlere ayrılmıştır:
 - `retrieval/`: pgvector store, hibrit retrieval, reranker ve kaynak seçimi.
 - `generation/`: Ollama, QA ve extractive fallback cevap üretimi.
 - `prompts/`: LLM prompt şablonları ve prompt builder.
-- `guardrails/`: retrieval ve çıktı grounding kontrolleri.
+- `guardrails/`: retrieval guard, çıktı grounding ve iddia bazlı kaynak doğrulama kontrolleri.
 - `observability/`: trace, süre ölçümü ve kalite log helper'ları.
 
 `app.py`, `rag_engine.py`, `cache.py`, `vector_store.py` ve `rag/` paketi eski import uyumluluğu için ince wrapper olarak korunur. Docker entrypoint'i `app.main:app` kullanır.
@@ -207,7 +208,29 @@ AI servisi kapatılarak simüle edilen hata sonrası başarısız doküman işle
 
 ### RAG guardrail katmanı
 
-AI servisi, belge dışı sorularda LLM'i doğrudan çalıştırmaz. Önce retrieval guard ile sorunun seçilen kaynak parçalarıyla ilişkisi kontrol edilir; genel bilgi veya alakasız sorular standart güvenli cevapla döner. Ollama etkinse cevap üretimi sıkı bir belge-bağlam prompt'u ile yapılır ve üretilen cevap tekrar kaynak terimleriyle doğrulanır. Kaynak dışı bilgi eklendiği tespit edilirse cevap iptal edilip "Bu bilgi belgede yer almıyor" fallback'i döndürülür.
+AI servisi, belge dışı sorularda LLM'i doğrudan çalıştırmaz. Önce retrieval guard ile sorunun seçilen kaynak parçalarıyla ilişkisi kontrol edilir; genel bilgi veya alakasız sorular standart güvenli cevapla döner. Ollama etkinse cevap üretimi yalnızca seçilen belge bağlamını kullanmasını isteyen sıkı bir prompt ile yapılır.
+
+Üretilen cevap kullanıcıya doğrudan gönderilmez. `guardrails/claim_validator.py` içindeki iddia bazlı doğrulama katmanı cevabı atomik iddialara ayırır ve her iddiayı retrieval sonucundaki kanıt pencereleriyle ayrı ayrı karşılaştırır. Bu kontrol yalnızca Ollama cevaplarına değil, Hugging Face QA ve extractive fallback yollarına da uygulanır.
+
+Doğrulama katmanı özellikle şunları kontrol eder:
+
+- Cevaptaki yüzde, tarih, para tutarı, süre ve diğer sayısal değerlerin aynı kanıt biriminde bulunması
+- Sorudaki kritik değerin cevapta korunması; örneğin soru `%50` iken cevabın `%25` olarak değiştirilmemesi
+- Kurum, model veya teknoloji kısaltmalarının kaynakla eşleşmesi
+- İddiadaki ana varlık ve ilişkinin kaynakta birlikte desteklenmesi
+- Olumlu ve olumsuz ifadelerin birbiriyle çelişmemesi
+- Farklı chunk veya farklı cümlelerdeki bağımsız gerçeklerin tek bir iddiayı destekliyormuş gibi birleştirilmemesi
+
+Model kaynakta desteklenen bir soru için yanlışlıkla “belgede yok” cevabı verirse sistem ilgili kanıttan güvenli bir fallback üretir. Modelin cevabı desteklenmiyor ancak retrieval kaynakları sorunun ana iddiasını destekliyorsa cevap kaynakla desteklenen içerikle değiştirilir. Ne model cevabı ne de getirilen kaynaklar yeterli kanıt sağlıyorsa standart no-answer cevabı döndürülür.
+
+Her karar AI servisinin response trace'ine ve debug loglarına aşağıdaki alanlarla eklenir:
+
+- `verificationDecision`: iddiaların destek durumu, eşleşen kaynak/chunk ve kritik gerçekler
+- `evidenceDecision`: retrieved kaynakların sorunun ana iddiasını destekleyip desteklemediği
+- `guardReason`: fallback veya ret kararının nedeni
+- `rejectedVerificationDecision`: değiştirilmiş model cevabının neden reddedildiği
+
+Bu katman hallucination riskini azaltır ancak tüm olası anlamsal hataları matematiksel olarak sıfırlamaz. Özellikle karmaşık tablo hesaplamaları, çok adımlı çıkarımlar ve belgeler arası karşılaştırmalar için ayrıca yapılandırılmış veri çıkarımı ve deterministik hesaplama gerekir.
 
 ### Roller, departman erişimi ve audit log
 
@@ -396,4 +419,3 @@ private-document-rag-ai/
 ├── docker-compose.yml
 └── README.md
 ```
-
