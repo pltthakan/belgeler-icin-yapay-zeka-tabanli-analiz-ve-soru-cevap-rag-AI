@@ -75,7 +75,7 @@ class CacheMixin:
     def _answer_model_cache_key(self) -> str:
         llm_key = f"ollama:{self.ollama_model}" if self.ollama_base_url and self.ollama_model else "ollama:none"
         return "|".join((
-            "engine-cache-v6-evidence-aware-percentage",
+            "engine-cache-v15-claim-level-verification",
             f"embedding:{self.embedding_model_name}",
             f"qa:{'disabled' if self.disable_qa_model else self.qa_model_name}",
             llm_key,

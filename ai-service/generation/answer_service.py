@@ -35,12 +35,18 @@ class AnswerServiceMixin:
         response_mode = self._classify_response_mode(question)
         application_answer = self._answer_application_requirement_question(question, sources)
         if application_answer is not None:
-            return application_answer, {
-                "provider": "application-requirements-structure",
-                "model": None,
-                "responseMode": response_mode,
-                "prompt": None,
-            }
+            return self._finalize_answer_candidate(
+                question=question,
+                answer=application_answer,
+                sources=sources,
+                response_mode=response_mode,
+                generation={
+                    "provider": "application-requirements-structure",
+                    "model": None,
+                    "responseMode": response_mode,
+                    "prompt": None,
+                },
+            )
 
         generated_result = self._answer_with_ollama(
             question=question,
@@ -50,58 +56,13 @@ class AnswerServiceMixin:
         )
         if generated_result:
             answer, generation = generated_result
-            evidence = self._evidence_support_decision(question, sources)
-            if self._is_no_answer_response(answer):
-                if evidence["supported"]:
-                    supported_answer = self._answer_from_supported_evidence(question, sources, evidence)
-                    self._log_fallback_decision(
-                        reason="model-no-answer-despite-supported-evidence",
-                        evidence=evidence,
-                        generation=generation,
-                    )
-                    return supported_answer, {
-                        **generation,
-                        "provider": "evidence-supported-fallback",
-                        "guardReason": "model-no-answer-despite-supported-evidence",
-                        "evidenceDecision": evidence,
-                    }
-                self._log_fallback_decision(
-                    reason="no-retrieved-chunk-supports-main-claim",
-                    evidence=evidence,
-                    generation=generation,
-                )
-                return answer, {
-                    **generation,
-                    "guardReason": "no-retrieved-chunk-supports-main-claim",
-                    "evidenceDecision": evidence,
-                }
-
-            if not self._is_grounded_answer(question, answer, sources, response_mode):
-                if evidence["supported"]:
-                    supported_answer = self._answer_from_supported_evidence(question, sources, evidence)
-                    self._log_fallback_decision(
-                        reason="unsupported-generation-replaced-by-supported-evidence",
-                        evidence=evidence,
-                        generation=generation,
-                    )
-                    return supported_answer, {
-                        **generation,
-                        "provider": "evidence-supported-fallback",
-                        "guardReason": "unsupported-generation-replaced-by-supported-evidence",
-                        "evidenceDecision": evidence,
-                    }
-                self._log_fallback_decision(
-                    reason="unsupported-generated-answer",
-                    evidence=evidence,
-                    generation=generation,
-                )
-                return self._out_of_scope_answer(), {
-                    **generation,
-                    "provider": "answer-grounding-guard",
-                    "guardReason": "unsupported-generated-answer",
-                    "evidenceDecision": evidence,
-                }
-            return answer, generation
+            return self._finalize_answer_candidate(
+                question=question,
+                answer=answer,
+                sources=sources,
+                response_mode=response_mode,
+                generation=generation,
+            )
 
         # Yerel LLM kapalıysa belge-genel sorular için QA modelinin rastgele bir
         # span seçmesine izin verme. Belge profili tüm ifade biçimlerinde aynı
@@ -112,6 +73,11 @@ class AnswerServiceMixin:
                 "model": None,
                 "responseMode": response_mode,
                 "prompt": None,
+                "verificationDecision": {
+                    "supported": True,
+                    "reason": "trusted-ingestion-document-profile",
+                    "claims": [],
+                },
             }
 
         if response_mode == "critique":
@@ -142,23 +108,154 @@ class AnswerServiceMixin:
                     continue
 
             if best_answer and best_score >= 0.02 and self._is_usable_qa_answer(best_answer):
-                return f"Belgeye göre: {best_answer}", {
-                    "provider": "huggingface-qa",
-                    "model": self.qa_model_name,
-                    "responseMode": response_mode,
-                    "prompt": None,
-                }
+                return self._finalize_answer_candidate(
+                    question=question,
+                    answer=f"Belgeye göre: {best_answer}",
+                    sources=sources,
+                    response_mode=response_mode,
+                    generation={
+                        "provider": "huggingface-qa",
+                        "model": self.qa_model_name,
+                        "responseMode": response_mode,
+                        "prompt": None,
+                    },
+                )
 
         # Model kullanılamadığında ham 900 karakterlik chunk döndürmek yerine,
         # soruyla en fazla kesişen kısa cümleleri seç.
         combined_sources = "\n".join(str(source.get("text", "")) for source in sources[:3])
         short_text = self._extract_relevant_passage(question, combined_sources)
-        return f"Belgeye göre: {short_text}", {
+        extractive_answer = f"Belgeye göre: {short_text}"
+        return extractive_answer, {
             "provider": "extractive-fallback",
             "model": None,
             "responseMode": response_mode,
             "prompt": None,
+            "verificationDecision": self._validate_answer_claims(
+                extractive_answer,
+                sources,
+                response_mode,
+                question=question,
+            ),
         }
+
+    def _finalize_answer_candidate(
+        self,
+        question: str,
+        answer: str,
+        sources: List[Dict[str, Any]],
+        response_mode: str,
+        generation: Dict[str, Any],
+    ) -> tuple[str, Dict[str, Any]]:
+        evidence = self._evidence_support_decision(question, sources)
+        if self._is_no_answer_response(answer):
+            if evidence["supported"]:
+                return self._supported_evidence_fallback(
+                    question=question,
+                    sources=sources,
+                    response_mode=response_mode,
+                    evidence=evidence,
+                    generation=generation,
+                    reason="model-no-answer-despite-supported-evidence",
+                )
+            self._log_fallback_decision(
+                reason="no-retrieved-chunk-supports-main-claim",
+                evidence=evidence,
+                generation=generation,
+            )
+            return answer, {
+                **generation,
+                "guardReason": "no-retrieved-chunk-supports-main-claim",
+                "evidenceDecision": evidence,
+                "verificationDecision": {
+                    "supported": True,
+                    "reason": "no-answer-confirmed-by-retrieved-evidence",
+                    "claims": [],
+                },
+            }
+
+        verification = self._validate_answer_claims(
+            answer,
+            sources,
+            response_mode,
+            question=question,
+        )
+        if verification["supported"]:
+            return answer, {
+                **generation,
+                "verificationDecision": verification,
+            }
+
+        if evidence["supported"]:
+            return self._supported_evidence_fallback(
+                question=question,
+                sources=sources,
+                response_mode=response_mode,
+                evidence=evidence,
+                generation=generation,
+                reason="unsupported-generation-replaced-by-supported-evidence",
+                original_verification=verification,
+            )
+
+        self._log_fallback_decision(
+            reason="unsupported-generated-answer",
+            evidence=evidence,
+            generation=generation,
+        )
+        return self._out_of_scope_answer(), {
+            **generation,
+            "provider": "answer-grounding-guard",
+            "guardReason": "unsupported-generated-answer",
+            "evidenceDecision": evidence,
+            "verificationDecision": verification,
+        }
+
+    def _supported_evidence_fallback(
+        self,
+        question: str,
+        sources: List[Dict[str, Any]],
+        response_mode: str,
+        evidence: Dict[str, Any],
+        generation: Dict[str, Any],
+        reason: str,
+        original_verification: Dict[str, Any] | None = None,
+    ) -> tuple[str, Dict[str, Any]]:
+        supported_answer = self._answer_from_supported_evidence(question, sources, evidence)
+        fallback_verification = self._validate_answer_claims(
+            supported_answer,
+            sources,
+            response_mode,
+            question=question,
+        )
+        if not fallback_verification["supported"]:
+            source_index = evidence.get("sourceIndex")
+            if isinstance(source_index, int) and 0 <= source_index < len(sources):
+                source_text = str(sources[source_index].get("text", ""))
+            else:
+                source_text = "\n".join(str(source.get("text", "")) for source in sources[:3])
+            supported_answer = f"Belgeye göre: {self._extract_relevant_passage(question, source_text)}"
+            fallback_verification = self._validate_answer_claims(
+                supported_answer,
+                sources,
+                response_mode,
+                question=question,
+            )
+
+        self._log_fallback_decision(
+            reason=reason,
+            evidence=evidence,
+            generation=generation,
+        )
+        result_generation = {
+            **generation,
+            "provider": "evidence-supported-fallback",
+            "guardReason": reason,
+            "evidenceDecision": evidence,
+            "verificationDecision": fallback_verification,
+        }
+        if original_verification is not None:
+            result_generation["rejectedVerificationDecision"] = original_verification
+        return supported_answer, result_generation
 
     def _answer_application_requirement_question(
         self,

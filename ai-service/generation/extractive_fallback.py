@@ -5,13 +5,16 @@ import re
 
 class ExtractiveFallbackMixin:
     def _extract_relevant_passage(self, question: str, text: str) -> str:
+        # PDF metin çıkarımındaki tek satır sonları çoğunlukla görsel satır
+        # kaydırmasıdır; bunları cümle sınırı saymak eksik pasajlar üretir.
+        normalized_text = re.sub(r"(?<!\n)\n(?!\n)", " ", text)
         sentences = [
             self._normalize_whitespace(sentence)
-            for sentence in re.split(r"(?<=[.!?])\s+|\n+", text)
+            for sentence in re.split(r"(?<=[.!?])\s+|\n{2,}", normalized_text)
             if self._normalize_whitespace(sentence)
         ]
         if not sentences:
-            return self._shorten(text, max_chars=450)
+            return self._shorten(normalized_text, max_chars=450)
 
         question_terms = self._meaningful_terms(question)
         scored = []
