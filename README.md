@@ -22,7 +22,8 @@ Bu proje şu akışı gerçekleştirir:
 
 ## Kullanıcı Arayüzü Önizlemesi
 
-<img width="1470" height="768" alt="Ekran Resmi 2026-07-02 22 03 23" src="https://github.com/user-attachments/assets/549dcfd5-9a42-4586-b636-9f73e11bb68c" />
+<img width="1102" height="752" alt="Ekran Resmi 2026-07-11 13 42 37" src="https://github.com/user-attachments/assets/51b3c349-b307-4b21-ba3f-051f02657ed4" />
+
 
 <img width="1417" height="772" alt="Ekran Resmi 2026-07-02 22 07 01" src="https://github.com/user-attachments/assets/94c10384-9566-433b-99a8-641bc8096847" />
 
