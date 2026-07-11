@@ -21,6 +21,7 @@ from generation.answer_service import AnswerServiceMixin
 from generation.extractive_fallback import ExtractiveFallbackMixin
 from generation.ollama_client import OllamaClientMixin
 from generation.qa_answerer import QaAnswererMixin
+from guardrails.claim_validator import ClaimValidatorMixin
 from guardrails.output_guard import OutputGuardMixin
 from guardrails.retrieval_guard import RetrievalGuardMixin
 from ingestion.document_parser import DocumentParserMixin
@@ -54,6 +55,7 @@ class RagEngine(
     ExtractiveFallbackMixin,
     OrderSensitiveAnswerMixin,
     RetrievalGuardMixin,
+    ClaimValidatorMixin,
     OutputGuardMixin,
     DocumentProfileMixin,
     TracingMixin,

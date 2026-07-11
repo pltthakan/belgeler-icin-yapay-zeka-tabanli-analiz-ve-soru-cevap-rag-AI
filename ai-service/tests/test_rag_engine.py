@@ -89,6 +89,22 @@ class RagEngineAnswerTests(unittest.TestCase):
 
         self.assertEqual(passage, "Ödenen ücrette memnun musunuz?")
 
+    def test_extractive_fallback_joins_pdf_wrapped_lines(self):
+        passage = self.engine._extract_relevant_passage(
+            "Burs öğrenim ücretini ne kadar kapsar?",
+            (
+                "Burslu programlara yerleştirilen öğrencilere sağlanan\n"
+                "burs, burs oranı kadar öğrenim ücretini kapsamaktadır.\n"
+                "Başvurular akademik yıl başında yapılır."
+            ),
+        )
+
+        self.assertEqual(
+            passage,
+            "Burslu programlara yerleştirilen öğrencilere sağlanan burs, "
+            "burs oranı kadar öğrenim ücretini kapsamaktadır.",
+        )
+
     def test_latest_course_question_uses_transcript_term_order(self):
         chunks = [
             {
@@ -323,6 +339,19 @@ class RagEngineAnswerTests(unittest.TestCase):
         self.assertFalse(decision["supported"])
         self.assertEqual(decision["reason"], "percentage-without-entity-relation-support")
 
+    def test_evidence_guard_rejects_question_with_unstated_qualifier(self):
+        sources = [{
+            "chunkIndex": 78,
+            "text": "Burs yalnızca burs oranı kadar normal öğrenim ücretini kapsar.",
+        }]
+
+        decision = self.engine._evidence_support_decision(
+            "Yaz okulunda burslu öğrenci ücret öder mi?",
+            sources,
+        )
+
+        self.assertFalse(decision["supported"])
+
     def test_model_no_answer_is_replaced_when_retrieved_evidence_supports_claim(self):
         question = "YKS'de %50 indirimli kontenjana yerleşen öğrenci hangi indirimi alır?"
         sources = [{
@@ -359,6 +388,34 @@ class RagEngineAnswerTests(unittest.TestCase):
         self.assertIn("exact-percentage-entity-relation-match", str(result_generation["evidenceDecision"]))
         self.assertIn("model-no-answer-despite-supported-evidence", " ".join(logs.output))
 
+    def test_supported_but_wrong_percentage_is_replaced_with_question_value(self):
+        question = "YKS'de %50 indirimli kontenjana yerleşen öğrenci hangi indirimi alır?"
+        sources = [{
+            "chunkIndex": 12,
+            "text": "YKS indirimli kontenjanları %50 veya %25 olarak belirlenir.",
+        }]
+        generation = {
+            "provider": "ollama",
+            "model": "qwen3:8b",
+            "responseMode": "factual",
+            "prompt": "test",
+        }
+
+        with patch.object(
+            self.engine,
+            "_answer_with_ollama",
+            return_value=("YKS öğrencisi %25 indirim alır.", generation),
+        ):
+            answer, result_generation = self.engine._build_answer_result(question, sources, {})
+
+        self.assertIn("%50", answer)
+        self.assertNotIn("%25", answer)
+        self.assertEqual(result_generation["provider"], "evidence-supported-fallback")
+        self.assertEqual(
+            result_generation["rejectedVerificationDecision"]["reason"],
+            "question-fact-mismatch",
+        )
+
     def test_no_answer_is_allowed_only_without_supporting_evidence(self):
         question = "YKS'de %50 indirimli kontenjana yerleşen öğrenci hangi indirimi alır?"
         sources = [{"chunkIndex": 1, "text": "Yatay geçiş başvuruları akademik takvimde ilan edilir."}]
@@ -381,6 +438,149 @@ class RagEngineAnswerTests(unittest.TestCase):
             result_generation["guardReason"],
             "no-retrieved-chunk-supports-main-claim",
         )
+
+    def test_claim_validator_rejects_fact_mixed_from_different_chunks(self):
+        sources = [
+            {"chunkIndex": 12, "text": "YKS indirimli kontenjanları %50 veya %25 olarak belirlenir."},
+            {"chunkIndex": 20, "text": "Engelli öğrencilere %10 indirim uygulanır."},
+        ]
+
+        decision = self.engine._validate_answer_claims(
+            "YKS indirimli kontenjanına yerleşen öğrenci %10 indirim alır.",
+            sources,
+            "factual",
+        )
+
+        self.assertFalse(decision["supported"])
+
+    def test_claim_validator_rejects_fact_mixed_from_sentences_in_same_chunk(self):
+        sources = [{
+            "chunkIndex": 12,
+            "text": (
+                "YKS indirimli kontenjanları %50 olarak belirlenir. "
+                "Engelli öğrencilere %10 indirim uygulanır."
+            ),
+        }]
+
+        decision = self.engine._validate_answer_claims(
+            "YKS indirimli kontenjanına yerleşen öğrenci %10 indirim alır.",
+            sources,
+            "factual",
+        )
+
+        self.assertFalse(decision["supported"])
+
+    def test_claim_validator_rejects_reversed_negation(self):
+        sources = [{
+            "chunkIndex": 4,
+            "text": "Burs ve indirimler yaz okulu öğrenim ücretini kapsamaz.",
+        }]
+
+        decision = self.engine._validate_answer_claims(
+            "Burs, yaz okulu öğrenim ücretini kapsar.",
+            sources,
+            "factual",
+        )
+
+        self.assertFalse(decision["supported"])
+        self.assertEqual(decision["claims"][0]["reason"], "claim-polarity-mismatch")
+
+    def test_claim_validator_rejects_unstated_subject_qualifier(self):
+        sources = [{
+            "chunkIndex": 78,
+            "text": (
+                "Burs veya indirim sadece burs/indirim oranı kadar öğrenim ücretini kapsar. "
+                "Burslar normal eğitim öğretim süresini kapsar."
+            ),
+        }]
+
+        decision = self.engine._validate_answer_claims(
+            "Yaz okulunda burslu öğrenci ücret öder.",
+            sources,
+            "factual",
+        )
+
+        self.assertFalse(decision["supported"])
+        self.assertEqual(decision["claims"][0]["reason"], "insufficient-claim-coverage")
+
+    def test_claim_validator_rejects_wrong_duration_and_money(self):
+        sources = [{
+            "chunkIndex": 7,
+            "text": "Fesih için 30 gün önce bildirim yapılır ve işlem bedeli 25.000 TL'dir.",
+        }]
+
+        duration_decision = self.engine._validate_answer_claims(
+            "Fesih bildirim süresi 15 gündür.", sources, "factual"
+        )
+        money_decision = self.engine._validate_answer_claims(
+            "İşlem bedeli 30.000 TL'dir.", sources, "factual"
+        )
+
+        self.assertFalse(duration_decision["supported"])
+        self.assertFalse(money_decision["supported"])
+
+    def test_claim_validator_normalizes_date_money_and_duration_formats(self):
+        sources = [{
+            "chunkIndex": 8,
+            "text": "Başvuru 15.07.2026 tarihinde kapanır. Ücret 25.000 TL ve süre 30 gündür.",
+        }]
+
+        decision = self.engine._validate_answer_claims(
+            "Başvuru 15 Temmuz 2026 tarihinde kapanır. Ücret 25.000 lira ve süre 30 gün.",
+            sources,
+            "factual",
+        )
+
+        self.assertTrue(decision["supported"])
+
+    def test_claim_validator_accepts_supported_multi_condition_claim(self):
+        sources = [{
+            "chunkIndex": 9,
+            "text": (
+                "Akademik başarı indirimi için öğrencinin yılsonu genel not ortalaması "
+                "en az 3.00 olmalı ve öğrenci bulunduğu sınıfta ilk 3'e girmelidir."
+            ),
+        }]
+
+        decision = self.engine._validate_answer_claims(
+            "Öğrencinin ortalaması en az 3.00 olmalı ve sınıfında ilk 3'e girmelidir.",
+            sources,
+            "factual",
+        )
+
+        self.assertTrue(decision["supported"])
+
+    def test_claim_validator_normalizes_ocr_damaged_class_numbers(self):
+        sources = [{
+            "chunkIndex": 7,
+            "text": "Programımıza tüm üniversitelerin .3 ve .4s ınıf mühendislik öğrencileri başvurabilir.",
+        }]
+
+        decision = self.engine._validate_answer_claims(
+            "Tüm üniversitelerin 3. ve 4. sınıf mühendislik öğrencileri başvurabilir.",
+            sources,
+            "factual",
+        )
+
+        self.assertTrue(decision["supported"])
+
+    def test_huggingface_qa_answer_also_passes_through_claim_verification(self):
+        question = "Sözleşmenin fesih bildirim süresi kaç gündür?"
+        sources = [{
+            "chunkIndex": 3,
+            "text": "Sözleşmenin feshi için diğer tarafa en az 30 gün önce bildirim yapılmalıdır.",
+        }]
+
+        def fake_qa_pipeline(question, context):
+            return {"answer": "15 gün", "score": 0.99}
+
+        with patch.object(self.engine, "_get_qa_pipeline", return_value=fake_qa_pipeline):
+            answer, generation = self.engine._build_answer_result(question, sources, {})
+
+        self.assertNotIn("15 gün", answer)
+        self.assertIn("30 gün", answer)
+        self.assertEqual(generation["provider"], "evidence-supported-fallback")
+        self.assertFalse(generation["rejectedVerificationDecision"]["supported"])
 
     def test_docx_extraction_includes_table_cells_in_document_order(self):
         document = Document()

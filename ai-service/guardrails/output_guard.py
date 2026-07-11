@@ -26,6 +26,7 @@ class OutputGuardMixin:
         ana varlık ve ilişki de aynı chunk içinde eşleşmelidir.
         """
         question_terms = self._meaningful_terms(question)
+        evidence_question_terms = question_terms - {"hangi", "kac", "nedir"}
         question_percentages = self._extract_percentages(question)
         question_relations = self._relation_concepts(question)
         question_entities = {
@@ -55,8 +56,8 @@ class OutputGuardMixin:
             )
             matched_relations = sorted(question_relations & source_relations)
             matched_terms = sorted(
-                term for term in question_terms
-                if self._has_matching_term(term, source_terms)
+                term for term in evidence_question_terms
+                if self._has_evidence_entity_match(term, source_terms)
             )
 
             if question_percentages:
@@ -71,10 +72,10 @@ class OutputGuardMixin:
                     else "percentage-without-entity-relation-support"
                 )
             else:
-                overlap_ratio = len(matched_terms) / max(len(question_terms), 1)
+                overlap_ratio = len(matched_terms) / max(len(evidence_question_terms), 1)
                 supported = bool(matched_entities) and (
                     bool(matched_relations) or len(matched_terms) >= 3
-                ) and overlap_ratio >= 0.4
+                ) and overlap_ratio >= 0.6
                 reason = "entity-relation-match" if supported else "insufficient-claim-overlap"
 
             strength = len(matched_percentages) * 4 + len(matched_entities) * 2 + len(matched_relations)
@@ -105,7 +106,7 @@ class OutputGuardMixin:
                     break
                 common_prefix_length += 1
             shortest_length = min(len(question_term), len(source_term))
-            if common_prefix_length >= 5 and common_prefix_length / shortest_length >= 0.7:
+            if common_prefix_length >= 4 and common_prefix_length / shortest_length >= 0.75:
                 return True
         return False
 
@@ -126,12 +127,23 @@ class OutputGuardMixin:
             "duration": ("sure", "gun", "ay", "yil"),
             "requirement": ("sart", "kosul", "kriter", "gerekiyor"),
             "date": ("tarih", "donem", "ne zaman"),
+            "coverage": ("kapsar", "kapsamaz", "kapsam"),
+            "approval": ("onay", "karar", "belirlenir", "belirler"),
+            "eligibility": ("basvur", "yararlan", "hak kazan"),
+            "payment": ("oder", "odenir", "odenmez", "odeme"),
+            "permission": ("izin", "yasak", "mumkun"),
         }
         return {
             relation
             for relation, markers in relation_markers.items()
-            if any(marker in normalized for marker in markers)
+            if any(self._contains_relation_marker(normalized, marker) for marker in markers)
         }
+
+    def _contains_relation_marker(self, normalized_text: str, marker: str) -> bool:
+        normalized_marker = self._normalize_for_matching(marker)
+        if " " in normalized_marker:
+            return normalized_marker in normalized_text
+        return re.search(rf"\b{re.escape(normalized_marker)}[a-z]*\b", normalized_text) is not None
 
     def _evidence_non_entity_terms(self) -> set[str]:
         return {
@@ -185,34 +197,14 @@ class OutputGuardMixin:
             return False
         if self._is_no_answer_response(answer):
             return not self._evidence_support_decision(question, sources)["supported"]
-        if response_mode == "summary":
-            return True
         if response_mode == "critique":
             return self._is_grounded_critique(answer, sources)
-
-        answer_terms = self._meaningful_terms(answer)
-        if not answer_terms:
-            return True
-
-        answer_percentages = self._extract_percentages(answer)
-        source_percentages = self._extract_percentages(
-            "\n".join(str(source.get("text", "")) for source in sources)
-        )
-        question_percentages = self._extract_percentages(question)
-        if not answer_percentages.issubset(source_percentages | question_percentages):
-            return False
-
-        allowed_terms = (
-            self._source_terms(sources)
-            | self._meaningful_terms(question)
-            | self._generic_answer_terms()
-        )
-        unsupported_terms = {
-            term for term in answer_terms
-            if not self._has_matching_term(term, allowed_terms)
-        }
-        allowed_unsupported_count = max(2, int(len(answer_terms) * 0.25))
-        return len(unsupported_terms) <= allowed_unsupported_count
+        return self._validate_answer_claims(
+            answer,
+            sources,
+            response_mode,
+            question=question,
+        )["supported"]
 
     def _generic_answer_terms(self) -> set[str]:
         return {
