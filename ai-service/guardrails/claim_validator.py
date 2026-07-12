@@ -73,7 +73,7 @@ class ClaimValidatorMixin:
         return [
             self._normalize_whitespace(claim).strip(" -")
             for claim in re.split(
-                r"(?<=[.!?])\s+(?=[A-ZÇĞİÖŞÜ])|\s*;\s+",
+                r"(?<!\d[.!?])(?<=[.!?])\s+(?=[A-ZÇĞİÖŞÜ])|\s*;\s+",
                 cleaned,
             )
             if self._normalize_whitespace(claim).strip(" -")
@@ -90,7 +90,7 @@ class ClaimValidatorMixin:
             units = [
                 self._normalize_whitespace(unit)
                 for unit in re.split(
-                    r"(?<=[.!?])\s+|\s+(?=\([0-9]+\)\s)|\n{2,}",
+                    r"(?<!\d[.!?])(?<=[.!?])\s+|\s+(?=\([0-9]+\)\s)|\n{2,}",
                     unwrapped_source_text,
                 )
                 if self._normalize_whitespace(unit)
