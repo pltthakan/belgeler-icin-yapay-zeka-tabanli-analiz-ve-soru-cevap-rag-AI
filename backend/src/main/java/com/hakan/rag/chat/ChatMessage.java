@@ -28,6 +28,9 @@ public class ChatMessage {
     @Column(columnDefinition = "TEXT")
     private String sourcesJson;
 
+    @Column(columnDefinition = "TEXT")
+    private String citationsJson;
+
     @Column(nullable = false)
     private LocalDateTime createdAt;
 
@@ -82,6 +85,14 @@ public class ChatMessage {
 
     public void setSourcesJson(String sourcesJson) {
         this.sourcesJson = sourcesJson;
+    }
+
+    public String getCitationsJson() {
+        return citationsJson;
+    }
+
+    public void setCitationsJson(String citationsJson) {
+        this.citationsJson = citationsJson;
     }
 
     public LocalDateTime getCreatedAt() {

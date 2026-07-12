@@ -95,7 +95,13 @@ def run_case(engine: RagEngine, case: Dict[str, Any], default_top_k: int) -> Dic
                 "prompt": None,
             },
         )
-        result = {"answer": answer, "sources": sources, "trace": trace}
+        result = engine._build_answer_payload(
+            question=case["question"],
+            answer=answer,
+            sources=sources,
+            generation=trace,
+            duration_ms=(time.perf_counter() - started_at) * 1000,
+        )
     else:
         document_id = write_case_index(engine, case)
         result = engine.answer_question(

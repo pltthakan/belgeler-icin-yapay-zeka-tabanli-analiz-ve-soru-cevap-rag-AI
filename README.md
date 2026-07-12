@@ -13,8 +13,8 @@ Bu proje şu akışı gerçekleştirir:
 7. Kullanıcı belge hakkında soru sorar.
 8. FastAPI servisi soru türüne göre belge profilini veya en alakalı kaynak parçalarını seçer; yapılandırılmışsa yerel LLM ile, değilse QA/extractive fallback ile belgeye dayalı cevap üretir.
 9. Üretilen cevap kullanıcıya gönderilmeden önce iddialara ayrılır; yüzdeler, tarihler, tutarlar, süreler, sayılar, varlıklar ve ilişkiler retrieval kaynaklarıyla doğrulanır. Desteklenmeyen veya soruyla çelişen cevap engellenir.
-10. Spring Boot cevabı ve kaynakları chat geçmişine; seçilen chunk’ları, prompt’u, model cevabını, süreyi ve hatayı LLM çalışma izine kaydeder. AI servisinin response trace'i ayrıca doğrulama kararını taşır.
-11. React arayüz cevapları ve kaynak parçaları gösterir.
+10. Spring Boot cevabı, claim-level citation'ları ve kaynakları chat geçmişine; seçilen chunk’ları, prompt’u, model cevabını, süreyi ve hatayı LLM çalışma izine kaydeder. AI servisinin response trace'i ayrıca doğrulama kararını taşır.
+11. React arayüz cevap içindeki tıklanabilir citation işaretlerini, ilgili kanıt alıntılarını ve kaynak parçalarını gösterir.
 
 ## Mimari
 
@@ -234,6 +234,28 @@ Her karar AI servisinin response trace'ine ve debug loglarına aşağıdaki alan
 
 Bu katman hallucination riskini azaltır ancak tüm olası anlamsal hataları matematiksel olarak sıfırlamaz. Özellikle karmaşık tablo hesaplamaları, çok adımlı çıkarımlar ve belgeler arası karşılaştırmalar için ayrıca yapılandırılmış veri çıkarımı ve deterministik hesaplama gerekir.
 
+### Claim-level inline citation
+
+AI servisi, output guard tarafından doğrulanan her atomik iddiayı onu destekleyen retrieval kaynağıyla eşleştirir. Yalnızca `verificationDecision.supported=true` olan iddialara `[1]`, `[2]` biçiminde inline citation eklenir; desteklenmeyen claim'ler ve standart no-answer yanıtları citation alamaz.
+
+Her citation aşağıdaki yapılandırılmış alanları taşır:
+
+- İddia metni ve citation numarası
+- Retrieval listesindeki kaynak konumu
+- Sayfa ve chunk numarası
+- İddiayı destekleyen kısa kanıt alıntısı
+- Claim validator eşleşme kapsamı
+
+Örnek cevap:
+
+```text
+Fesih bildirim süresi 30 gündür [1].
+```
+
+React sohbet ekranında `[1]` işareti tıklanınca ilgili kanıt kartına gidilir. Kanıt kartı sayfa/chunk bilgisini ve claim terimlerinin yoğun olduğu kaynak alıntısını gösterir. Tam retrieval parçaları ayrıca **Kaynak parçaları göster** bölümünde korunur.
+
+Citation listesi Spring Boot tarafından `chat_messages.citations_json` alanında cevapla birlikte saklanır ve chat geçmişinde tekrar döndürülür. Özellik eklenmeden önce oluşturulmuş mesajlar geriye uyumlu olarak boş citation listesiyle açılır. Redis cevap cache versiyonu citation sözleşmesiyle birlikte yükseltildiği için eski citation'sız cevap cache kayıtları kullanılmaz.
+
 ### Roller, departman erişimi ve audit log
 
 Roller `EMPLOYEE`, `MANAGER` ve `ADMIN` olarak tanımlıdır. Her yeni belge varsayılan olarak **özel** oluşturulur. Belge sahibi veya admin belgeyi **departmanla paylaşabilir**; aynı departmandaki kullanıcılar belgeyi görüntüleyip soru sorabilir. Departman yöneticisi (`MANAGER`) yalnızca kendi departmanıyla paylaşılmış belgeyi yeniden indeksleyebilir; silme ve paylaşım ayarı belge sahibi veya `ADMIN` ile sınırlıdır.
@@ -275,7 +297,7 @@ Evaluation runner aşağıdaki metrikleri üretir:
 - Retrieval `Recall@K`, `Precision@K` ve `MRR`
 - Deterministik cevap doğruluğu
 - Claim verification tabanlı groundedness
-- Kaynak/citation doğruluğu
+- Gerçek claim-level citation nesnesinin beklenen kaynak chunk'ına bağlanma doğruluğu
 - No-answer doğruluğu
 - Output guard doğruluğu
 - Ortalama, p50, p95 ve maksimum latency

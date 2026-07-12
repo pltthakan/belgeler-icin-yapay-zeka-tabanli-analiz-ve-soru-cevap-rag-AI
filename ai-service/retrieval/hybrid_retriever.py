@@ -45,15 +45,13 @@ class HybridRetrieverMixin:
             return self._answer_result_from_guard(guard_result, started_at)
 
         answer, generation = self._build_answer_result(question, selected_sources, document_profile)
-        return {
-            "answer": answer,
-            "sources": selected_sources,
-            "trace": self._build_trace(
-                generation=generation,
-                selected_sources=selected_sources,
-                duration_ms=(time.perf_counter() - started_at) * 1000,
-            ),
-        }
+        return self._build_answer_payload(
+            question=question,
+            answer=answer,
+            sources=selected_sources,
+            generation=generation,
+            duration_ms=(time.perf_counter() - started_at) * 1000,
+        )
 
     def _hybrid_sources_from_memory(
         self,

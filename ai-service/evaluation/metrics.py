@@ -74,6 +74,7 @@ def _forbidden_terms(case: Dict[str, Any], answer: str) -> List[str]:
 def score_case(case: Dict[str, Any], result: Dict[str, Any], duration_ms: float) -> Dict[str, Any]:
     answer = str(result.get("answer", ""))
     sources = result.get("sources") if isinstance(result.get("sources"), list) else []
+    citations = result.get("citations") if isinstance(result.get("citations"), list) else []
     trace = result.get("trace") if isinstance(result.get("trace"), dict) else {}
     retrieved_chunks = [
         int(source["chunkIndex"])
@@ -124,7 +125,12 @@ def score_case(case: Dict[str, Any], result: Dict[str, Any], duration_ms: float)
         grounded = False
 
     citation_applicable = evaluation_mode == "pipeline" and should_answer and bool(relevant_chunks)
-    citation_correct = bool(set(retrieved_chunks) & relevant_chunks) if citation_applicable else True
+    cited_chunks = {
+        int(citation["chunkIndex"])
+        for citation in citations
+        if isinstance(citation, dict) and citation.get("chunkIndex") is not None
+    }
+    citation_correct = bool(cited_chunks & relevant_chunks) if citation_applicable else True
     failures = []
     if not retrieval_hit:
         failures.append("expected-source-not-retrieved")
@@ -165,6 +171,8 @@ def score_case(case: Dict[str, Any], result: Dict[str, Any], duration_ms: float)
         "grounded": grounded,
         "citationApplicable": citation_applicable,
         "citationCorrect": citation_correct,
+        "citationCount": len(citations),
+        "citedChunks": sorted(cited_chunks),
         "guardCorrect": guard_correct,
     }
 

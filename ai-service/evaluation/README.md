@@ -17,7 +17,7 @@ Vakalar doğrudan bilgi, çoklu gerçek, yüzde, para, tarih, süre, olumsuz ifa
 - **MRR:** İlk ilgili chunk'ın sırasına göre reciprocal rank
 - **Answer correctness:** Gerekli ve yasaklı cevap gerçeklerine göre deterministik doğruluk
 - **Groundedness:** Cevabın claim verification kararının kaynak desteği
-- **Citation accuracy:** En az bir doğru kaynak chunk'ının cevapla birlikte dönmesi
+- **Citation accuracy:** Üretilen claim-level citation nesnesinin beklenen kaynak chunk'ına bağlanması
 - **No-answer accuracy:** Kaynakta olmayan soruların güvenli biçimde reddedilmesi
 - **Guard accuracy:** Enjekte edilen yanlış model cevaplarının engellenmesi veya düzeltilmesi
 - **Latency:** Ortalama, p50, p95 ve maksimum uçtan uca süre
