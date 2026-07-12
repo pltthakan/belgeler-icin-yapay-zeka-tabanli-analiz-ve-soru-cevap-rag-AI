@@ -2,6 +2,7 @@
   "cases": [
     {
       "id": "candidate-tech-profile",
+      "category": "multi-fact",
       "question": "Adayın React ve Flask deneyimi nedir?",
       "chunks": [
         {
@@ -11,13 +12,18 @@
         {
           "pageNumber": 1,
           "text": "EĞİTİM\nBilgisayar mühendisliği lisans eğitimi tamamlanmıştır."
+        },
+        {
+          "pageNumber": 2,
+          "text": "YABANCI DİL\nAdayın İngilizce seviyesi B2 olarak değerlendirilmiştir."
         }
       ],
       "expectedSourceChunks": [0],
-      "requiredAnswerTerms": ["react", "flask"]
+      "requiredAnswerTerms": ["React", "Flask"]
     },
     {
       "id": "contract-notice-period",
+      "category": "duration",
       "question": "Sözleşmenin fesih bildirim süresi kaç gündür?",
       "chunks": [
         {
@@ -27,13 +33,19 @@
         {
           "pageNumber": 2,
           "text": "FESİH\nTaraflardan biri sözleşmeyi feshetmek isterse diğer tarafa en az 30 gün önce yazılı bildirim yapmalıdır."
+        },
+        {
+          "pageNumber": 3,
+          "text": "ÖDEME\nFaturalar düzenlendikten sonra 15 gün içinde ödenir."
         }
       ],
       "expectedSourceChunks": [1],
-      "requiredAnswerTerms": ["30", "gün"]
+      "requiredAnswerTerms": ["30", "gün"],
+      "forbiddenAnswerTerms": ["15 gün"]
     },
     {
       "id": "support-procedure",
+      "category": "list",
       "question": "Destek personelinin sorumlulukları nelerdir?",
       "chunks": [
         {
@@ -43,10 +55,202 @@
         {
           "pageNumber": 2,
           "text": "BİLGİ GÜVENLİĞİ\nMüşteri verileri yalnızca yetkili personel tarafından görüntülenebilir."
+        },
+        {
+          "pageNumber": 3,
+          "text": "SATIŞ\nSatış temsilcisi teklifleri hazırlar ve siparişleri takip eder."
         }
       ],
       "expectedSourceChunks": [0],
-      "requiredAnswerTerms": ["kayıt", "müşteri"]
+      "requiredAnswerTerms": ["kayıt", "önceliklendirir", "müşteriye"]
+    },
+    {
+      "id": "discount-exact-percentage",
+      "category": "percentage",
+      "question": "YKS'de yüzde 50 indirimli kontenjana yerleşen öğrenci hangi indirimi alır?",
+      "chunks": [
+        {
+          "pageNumber": 2,
+          "text": "YKS İNDİRİMLİ KONTENJANLAR\nYKS kılavuzunda yüzde 50 indirimli kontenjana yerleşen öğrenci yüzde 50 öğrenim ücreti indirimi alır. Yüzde 25 indirimli kontenjan ayrı bir kontenjan türüdür."
+        },
+        {
+          "pageNumber": 4,
+          "text": "KARDEŞ İNDİRİMİ\nKardeş indirimi öğrenim ücretinin yüzde 10'u oranındadır."
+        },
+        {
+          "pageNumber": 5,
+          "text": "SPOR BURSU\nMilli sporcular için burs oranı ayrıca değerlendirilir."
+        }
+      ],
+      "expectedSourceChunks": [0],
+      "requiredAnswerTermGroups": [["%50", "yüzde 50"]]
+    },
+    {
+      "id": "invoice-amount-currency",
+      "category": "money",
+      "question": "Yıllık bakım hizmetinin ücreti kaç TL'dir?",
+      "chunks": [
+        {
+          "pageNumber": 1,
+          "text": "HİZMET BEDELİ\nYıllık bakım hizmetinin toplam ücreti 48.000 TL'dir. Bu tutara vergiler dahil değildir."
+        },
+        {
+          "pageNumber": 2,
+          "text": "KURULUM\nTek seferlik kurulum bedeli 7.500 TL olarak uygulanır."
+        },
+        {
+          "pageNumber": 3,
+          "text": "DESTEK\nUzaktan destek hafta içi mesai saatlerinde sağlanır."
+        }
+      ],
+      "expectedSourceChunks": [0],
+      "requiredAnswerTermGroups": [["48.000 TL", "48000 TL"]],
+      "forbiddenAnswerTerms": ["7.500 TL"]
+    },
+    {
+      "id": "meeting-date",
+      "category": "date",
+      "question": "Proje başlangıç toplantısı hangi tarihte yapılacaktır?",
+      "chunks": [
+        {
+          "pageNumber": 1,
+          "text": "PROJE TAKVİMİ\nProje başlangıç toplantısı 15 Temmuz 2026 tarihinde yapılacaktır."
+        },
+        {
+          "pageNumber": 2,
+          "text": "ARA RAPOR\nAra rapor 30 Eylül 2026 tarihine kadar teslim edilir."
+        },
+        {
+          "pageNumber": 3,
+          "text": "KAPANIŞ\nProje kapanış sunumu çevrim içi gerçekleştirilecektir."
+        }
+      ],
+      "expectedSourceChunks": [0],
+      "requiredAnswerTermGroups": [["15 Temmuz 2026", "15.07.2026"]],
+      "forbiddenAnswerTerms": ["30 Eylül 2026"]
+    },
+    {
+      "id": "negative-policy",
+      "category": "negation",
+      "question": "Standart garanti kullanıcı hatalarını kapsar mı?",
+      "chunks": [
+        {
+          "pageNumber": 3,
+          "text": "GARANTİ KAPSAMI\nStandart garanti kullanıcı hatalarını ve fiziksel darbeleri kapsamaz."
+        },
+        {
+          "pageNumber": 4,
+          "text": "SERVİS\nGaranti kapsamındaki ürünler ücretsiz incelenir."
+        },
+        {
+          "pageNumber": 5,
+          "text": "TESLİMAT\nOnarılan ürün müşteriye kargo ile gönderilir."
+        }
+      ],
+      "expectedSourceChunks": [0],
+      "requiredAnswerTermGroups": [["kapsamaz", "hayır"]]
+    },
+    {
+      "id": "movie-data-api",
+      "category": "entity",
+      "question": "Film verileri hangi API üzerinden alınmaktadır?",
+      "chunks": [
+        {
+          "pageNumber": 2,
+          "text": "VERİ KAYNAĞI\nFilm başlığı, türü ve oyuncu bilgileri TMDB API üzerinden alınmaktadır."
+        },
+        {
+          "pageNumber": 3,
+          "text": "MODEL\nFilm açıklamaları Sentence-BERT modeli ile vektörleştirilir."
+        },
+        {
+          "pageNumber": 4,
+          "text": "VERİTABANI\nKullanıcı etkileşimleri PostgreSQL veritabanında saklanır."
+        }
+      ],
+      "expectedSourceChunks": [0],
+      "requiredAnswerTerms": ["TMDB API"]
+    },
+    {
+      "id": "similar-entity-disambiguation",
+      "category": "entity-disambiguation",
+      "question": "Atlas projesinde hangi backend framework kullanılmaktadır?",
+      "chunks": [
+        {
+          "pageNumber": 1,
+          "text": "ATLAS PROJESİ\nAtlas projesinin backend servisi Flask framework ile geliştirilmiştir."
+        },
+        {
+          "pageNumber": 2,
+          "text": "BOREAS PROJESİ\nBoreas projesinin backend servisi Spring Boot ile geliştirilmiştir."
+        },
+        {
+          "pageNumber": 3,
+          "text": "ATLAS ARAYÜZÜ\nAtlas kullanıcı arayüzünde React kullanılmaktadır."
+        }
+      ],
+      "expectedSourceChunks": [0],
+      "requiredAnswerTerms": ["Flask"],
+      "forbiddenAnswerTerms": ["Spring Boot"]
+    },
+    {
+      "id": "ocr-class-requirement",
+      "category": "ocr-noise",
+      "question": "Aday mühendislik programına hangi sınıflar başvurabilir?",
+      "chunks": [
+        {
+          "pageNumber": 4,
+          "text": "BAŞVURU KOŞULLARI\nProgramımıza tüm üniversitelerin .3 ve .4s ınıf mühendislik öğrencileri başvurabilir."
+        },
+        {
+          "pageNumber": 5,
+          "text": "SINAV SÜRECİ\nAdaylar genel yetenek ve İngilizce sınavına alınır."
+        },
+        {
+          "pageNumber": 6,
+          "text": "MÜLAKAT\nBaşarılı adaylarla teknik mülakat yapılır."
+        }
+      ],
+      "expectedSourceChunks": [0],
+      "requiredAnswerTermGroups": [
+        ["3", ".3"],
+        ["4", ".4s"],
+        ["sınıf", "ınıf"]
+      ]
+    },
+    {
+      "id": "external-general-knowledge",
+      "category": "no-answer",
+      "question": "Mars'ın nüfusu kaç kişidir?",
+      "chunks": [
+        {
+          "pageNumber": 1,
+          "text": "ÇALIŞAN EL KİTABI\nYıllık izin talepleri insan kaynakları sistemi üzerinden iletilir."
+        },
+        {
+          "pageNumber": 2,
+          "text": "ÇALIŞMA SAATLERİ\nHaftalık çalışma süresi 45 saattir."
+        }
+      ],
+      "expectedSourceChunks": [],
+      "shouldAnswer": false
+    },
+    {
+      "id": "gibberish-question",
+      "category": "no-answer",
+      "question": "sjdhfsahjd",
+      "chunks": [
+        {
+          "pageNumber": 1,
+          "text": "PROJE TANIMI\nSistem müşteri taleplerini sınıflandırır ve ilgili ekibe yönlendirir."
+        },
+        {
+          "pageNumber": 2,
+          "text": "TEKNOLOJİ\nUygulama Java ve React kullanılarak geliştirilmiştir."
+        }
+      ],
+      "expectedSourceChunks": [],
+      "shouldAnswer": false
     }
   ]
 }

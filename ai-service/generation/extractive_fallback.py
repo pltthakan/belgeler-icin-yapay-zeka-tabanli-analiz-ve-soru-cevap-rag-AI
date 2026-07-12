@@ -10,7 +10,7 @@ class ExtractiveFallbackMixin:
         normalized_text = re.sub(r"(?<!\n)\n(?!\n)", " ", text)
         sentences = [
             self._normalize_whitespace(sentence)
-            for sentence in re.split(r"(?<=[.!?])\s+|\n{2,}", normalized_text)
+            for sentence in re.split(r"(?<!\d[.!?])(?<=[.!?])\s+|\n{2,}", normalized_text)
             if self._normalize_whitespace(sentence)
         ]
         if not sentences:

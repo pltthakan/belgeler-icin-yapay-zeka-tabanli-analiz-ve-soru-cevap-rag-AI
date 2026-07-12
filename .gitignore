@@ -13,6 +13,7 @@ frontend/dist/
 ai-service/.venv/
 ai-service/__pycache__/
 ai-service/data/
+ai-service/evaluation/reports/*.json
 *.pyc
 
 # Runtime uploads

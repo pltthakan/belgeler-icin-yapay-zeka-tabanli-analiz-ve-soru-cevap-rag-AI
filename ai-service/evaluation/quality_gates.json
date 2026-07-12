@@ -1,0 +1,13 @@
+{
+  "minimums": {
+    "casePassRate": 0.90,
+    "retrieval.recallAtK": 0.90,
+    "retrieval.precisionAtK": 0.30,
+    "retrieval.mrr": 0.80,
+    "answerCorrectness": 0.90,
+    "groundedness": 0.90,
+    "citationAccuracy": 0.90,
+    "noAnswerAccuracy": 1.0,
+    "guardAccuracy": 1.0
+  }
+}

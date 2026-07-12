@@ -76,6 +76,7 @@ AI servisinin iç yapısı domain bazlı paketlere ayrılmıştır:
 - `ingestion/`: PDF/DOCX/TXT parser'ları ve belge profili çıkarımı.
 - `chunking/`: başlık ve semantik chunking mantığı.
 - `embeddings/`: embedding modeli ve embedding üretim servisi.
+- `evaluation/`: geniş sentetik RAG veri seti, kalite metrikleri, guard regresyonları ve JSON raporlama.
 - `retrieval/`: pgvector store, hibrit retrieval, reranker ve kaynak seçimi.
 - `generation/`: Ollama, QA ve extractive fallback cevap üretimi.
 - `prompts/`: LLM prompt şablonları ve prompt builder.
@@ -265,17 +266,37 @@ Soru türü otomatik olarak sınıflandırılır:
 - **Özet sorusu:** Belgenin türünü, amacını ve ana konusunu özetler.
 - **Değerlendirme sorusu:** “Sence”, “eksikleri neler?”, “nasıl iyileşir?” gibi sorularda belgeye dayalı çıkarım yapar; çıkarımı kesin belge bilgisi gibi sunmaz.
 
-`ai-service/evaluation/cases.json`, kişisel veri içermeyen sentetik regresyon vakalarını içerir. Retrieval ve cevap davranışını kontrol etmek için:
+### Geniş RAG evaluation paketi
+
+`ai-service/evaluation/` altında kişisel veri içermeyen 12 uçtan uca RAG vakası ve 4 output guard regresyon vakası bulunur. Paket; doğrudan bilgi, yüzde, tarih, tutar, süre, olumsuz ifade, benzer varlık ayrımı, OCR bozulması, no-answer ve enjekte edilmiş hatalı model cevabı senaryolarını kapsar.
+
+Evaluation runner aşağıdaki metrikleri üretir:
+
+- Retrieval `Recall@K`, `Precision@K` ve `MRR`
+- Deterministik cevap doğruluğu
+- Claim verification tabanlı groundedness
+- Kaynak/citation doğruluğu
+- No-answer doğruluğu
+- Output guard doğruluğu
+- Ortalama, p50, p95 ve maksimum latency
+
+`quality_gates.json` içindeki minimum eşiklerden biri sağlanmazsa komut non-zero exit code ile sonlanır. Böylece paket yerel regresyon kontrolünde ve CI quality gate olarak kullanılabilir. Varsayılan çevrimdışı koşu Redis'i devre dışı bırakır, geçici indeks ve deterministik hashing embedding kullanır; dış model servisine veya kişisel belgeye ihtiyaç duymaz.
+
+Retrieval, cevap ve guard davranışını birlikte kontrol etmek için:
 
 ```bash
 docker compose exec ai-service python evaluation/run_evaluation.py
 ```
+
+Detaylı makinece okunabilir rapor Docker ortamında kalıcı `ai_data` volume'u içindeki `/app/data/evaluation/latest.json` dosyasına yazılır. Raporu host'a almak için `docker compose cp ai-service:/app/data/evaluation/latest.json ai-service/evaluation/reports/latest.json` kullanılabilir; runtime raporları Git tarafından izlenmez.
 
 Aktif Ollama modeliyle cevap üretimini de test etmek için:
 
 ```bash
 docker compose exec ai-service python evaluation/run_evaluation.py --with-ollama
 ```
+
+Sentetik baseline koşusunun başarılı olması üretim belgelerinde yüzde yüz doğruluk garantisi değildir. Yeni belge türleri ve tespit edilen hatalar ayrı regresyon vakaları olarak veri setine eklenmelidir. Veri seti formatı ve komut seçenekleri [evaluation dokümantasyonunda](ai-service/evaluation/README.md) açıklanır.
 
 ## IDE önerisi
 
