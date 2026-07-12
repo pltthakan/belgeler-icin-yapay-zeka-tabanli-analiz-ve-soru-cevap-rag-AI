@@ -256,6 +256,9 @@ React sohbet ekranında `[1]` işareti tıklanınca ilgili kanıt kartına gidil
 
 Citation listesi Spring Boot tarafından `chat_messages.citations_json` alanında cevapla birlikte saklanır ve chat geçmişinde tekrar döndürülür. Özellik eklenmeden önce oluşturulmuş mesajlar geriye uyumlu olarak boş citation listesiyle açılır. Redis cevap cache versiyonu citation sözleşmesiyle birlikte yükseltildiği için eski citation'sız cevap cache kayıtları kullanılmaz.
 
+<img width="745" height="432" alt="Ekran Resmi 2026-07-12 18 59 24" src="https://github.com/user-attachments/assets/7cf37377-a94b-436d-bb6a-b66765718441" />
+
+
 ### Roller, departman erişimi ve audit log
 
 Roller `EMPLOYEE`, `MANAGER` ve `ADMIN` olarak tanımlıdır. Her yeni belge varsayılan olarak **özel** oluşturulur. Belge sahibi veya admin belgeyi **departmanla paylaşabilir**; aynı departmandaki kullanıcılar belgeyi görüntüleyip soru sorabilir. Departman yöneticisi (`MANAGER`) yalnızca kendi departmanıyla paylaşılmış belgeyi yeniden indeksleyebilir; silme ve paylaşım ayarı belge sahibi veya `ADMIN` ile sınırlıdır.
