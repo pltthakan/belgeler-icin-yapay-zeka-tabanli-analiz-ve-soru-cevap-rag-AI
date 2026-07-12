@@ -32,6 +32,7 @@ class EvaluationMetricsTests(unittest.TestCase):
                 {"chunkIndex": 2, "text": "Süre 30 gündür."},
                 {"chunkIndex": 1, "text": "Başka bilgi."},
             ],
+            "citations": [{"id": 1, "chunkIndex": 2}],
             "trace": {"verificationDecision": {"supported": True}},
         }
 
@@ -56,6 +57,7 @@ class EvaluationMetricsTests(unittest.TestCase):
         result = {
             "answer": "İndirim yüzde 25'tir.",
             "sources": [{"chunkIndex": 0, "text": "İndirim yüzde 50'dir."}],
+            "citations": [],
             "trace": {"verificationDecision": {"supported": False}},
         }
 
@@ -75,6 +77,7 @@ class EvaluationMetricsTests(unittest.TestCase):
         result = {
             "answer": "Bu bilgi belgede yer almıyor.",
             "sources": [],
+            "citations": [],
             "trace": {"provider": "retrieval-guard"},
         }
 

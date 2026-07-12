@@ -2,6 +2,54 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import api, { getErrorMessage } from '../api/client.js'
 
+function AnswerWithCitations({ message }) {
+  const citations = Array.isArray(message.citations) ? message.citations : []
+  const citationsById = new Map(citations.map((citation) => [Number(citation.id), citation]))
+  const parts = String(message.answer || '').split(/(\[\d+\])/g)
+
+  return (
+    <>
+      <div className="answer">
+        <strong>AI:</strong>
+        <div className="answer-text">
+          {parts.map((part, index) => {
+            const match = part.match(/^\[(\d+)\]$/)
+            const citation = match ? citationsById.get(Number(match[1])) : null
+            if (!citation) return <span key={`${part}-${index}`}>{part}</span>
+
+            const targetId = `citation-${message.id}-${citation.id}`
+            return (
+              <a
+                className="citation-marker"
+                href={`#${targetId}`}
+                key={`${citation.id}-${index}`}
+                title={`Sayfa ${citation.pageNumber ?? '-'}, chunk ${citation.chunkIndex ?? '-'}`}
+                aria-label={`Kaynak ${citation.id}: sayfa ${citation.pageNumber ?? 'bilinmiyor'}`}
+              >
+                [{citation.id}]
+              </a>
+            )
+          })}
+        </div>
+      </div>
+
+      {citations.length > 0 && (
+        <section className="citation-list" aria-label="Cevap kaynakları">
+          {citations.map((citation) => (
+            <article className="citation-evidence" id={`citation-${message.id}-${citation.id}`} key={citation.id}>
+              <div className="citation-heading">
+                <strong>[{citation.id}] Kanıt</strong>
+                <span>Sayfa {citation.pageNumber ?? '-'} · Chunk {citation.chunkIndex ?? '-'}</span>
+              </div>
+              <p>{citation.quote}</p>
+            </article>
+          ))}
+        </section>
+      )}
+    </>
+  )
+}
+
 export default function Chat() {
   const { id } = useParams()
   const [document, setDocument] = useState(null)
@@ -69,7 +117,7 @@ export default function Chat() {
         {messages.map((message) => (
           <div className="message" key={message.id}>
             <div className="question"><strong>Sen:</strong> {message.question}</div>
-            <div className="answer"><strong>AI:</strong><br />{message.answer}</div>
+            <AnswerWithCitations message={message} />
             {message.sources?.length > 0 && (
               <details className="sources">
                 <summary>Kaynak parçaları göster</summary>

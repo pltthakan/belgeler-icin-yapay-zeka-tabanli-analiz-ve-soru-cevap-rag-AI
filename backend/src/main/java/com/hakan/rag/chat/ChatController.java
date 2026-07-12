@@ -82,7 +82,12 @@ public class ChatController {
         message.setDocument(document);
         message.setQuestion(request.question());
         message.setAnswer(aiResponse.answer());
-        message.setSourcesJson(objectMapper.writeValueAsString(aiResponse.sources()));
+        message.setSourcesJson(objectMapper.writeValueAsString(
+                aiResponse.sources() == null ? Collections.emptyList() : aiResponse.sources()
+        ));
+        message.setCitationsJson(objectMapper.writeValueAsString(
+                aiResponse.citations() == null ? Collections.emptyList() : aiResponse.citations()
+        ));
         chatMessageRepository.save(message);
         auditLogService.record(user, AuditAction.CHAT_QUESTION_ASKED, document.getId(), Map.of(
                 "questionLength", request.question().length(),
@@ -107,9 +112,19 @@ public class ChatController {
 
     private ChatMessageResponse toResponse(ChatMessage message) {
         List<SourceResponse> sources = Collections.emptyList();
+        List<CitationResponse> citations = Collections.emptyList();
         try {
             if (message.getSourcesJson() != null && !message.getSourcesJson().isBlank()) {
                 sources = objectMapper.readValue(message.getSourcesJson(), new TypeReference<List<SourceResponse>>() {});
+            }
+        } catch (Exception ignored) {
+        }
+        try {
+            if (message.getCitationsJson() != null && !message.getCitationsJson().isBlank()) {
+                citations = objectMapper.readValue(
+                        message.getCitationsJson(),
+                        new TypeReference<List<CitationResponse>>() {}
+                );
             }
         } catch (Exception ignored) {
         }
@@ -118,6 +133,7 @@ public class ChatController {
                 message.getQuestion(),
                 message.getAnswer(),
                 sources,
+                citations,
                 message.getCreatedAt()
         );
     }

@@ -371,8 +371,64 @@ pre {
   background: #f7f9fc;
   padding: 12px;
   border-radius: 12px;
-  white-space: pre-wrap;
   line-height: 1.55;
+}
+
+.answer-text {
+  margin-top: 4px;
+  white-space: pre-wrap;
+}
+
+.citation-marker {
+  color: #2557d6;
+  font-size: 0.78em;
+  font-weight: 900;
+  margin-left: 2px;
+  vertical-align: super;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.citation-marker:hover,
+.citation-marker:focus-visible {
+  color: #143b9f;
+}
+
+.citation-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.citation-evidence {
+  border-left: 3px solid #2557d6;
+  background: #f8faff;
+  padding: 10px 12px;
+  scroll-margin-top: 90px;
+}
+
+.citation-evidence:target {
+  background: #eef4ff;
+  outline: 2px solid #9bb7ff;
+  outline-offset: 2px;
+}
+
+.citation-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: #53617a;
+  font-size: 13px;
+}
+
+.citation-heading strong {
+  color: #1b3f91;
+}
+
+.citation-evidence p {
+  margin: 6px 0 0;
+  color: #303a4f;
+  line-height: 1.45;
 }
 
 .sources {
@@ -419,6 +475,11 @@ pre {
   .upload-form,
   .ask-form {
     flex-direction: column;
+  }
+  .citation-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
   }
   .quality-panel .section-title {
     gap: 12px;

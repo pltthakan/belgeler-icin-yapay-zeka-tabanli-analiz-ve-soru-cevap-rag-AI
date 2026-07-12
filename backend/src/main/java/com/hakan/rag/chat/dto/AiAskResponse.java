@@ -6,5 +6,6 @@ import java.util.Map;
 public record AiAskResponse(
         String answer,
         List<SourceResponse> sources,
+        List<CitationResponse> citations,
         Map<String, Object> trace
 ) {}

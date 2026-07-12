@@ -254,15 +254,13 @@ class OrderSensitiveAnswerMixin:
 
         answer, generation = self._build_answer_result(question, sources, document_profile)
         generation = {**generation, "retrievalStrategy": f"document-order-{direction}"}
-        return {
-            "answer": answer,
-            "sources": sources,
-            "trace": self._build_trace(
-                generation=generation,
-                selected_sources=sources,
-                duration_ms=(time.perf_counter() - started_at) * 1000,
-            ),
-        }
+        return self._build_answer_payload(
+            question=question,
+            answer=answer,
+            sources=sources,
+            generation=generation,
+            duration_ms=(time.perf_counter() - started_at) * 1000,
+        )
 
     def _answer_latest_course_question(
         self,
@@ -283,20 +281,18 @@ class OrderSensitiveAnswerMixin:
         )
         sources = [latest_course["source"]]
 
-        return {
-            "answer": answer,
-            "sources": sources,
-            "trace": self._build_trace(
-                generation={
-                    "provider": "transcript-structure",
-                    "model": None,
-                    "responseMode": "factual",
-                    "prompt": None,
-                },
-                selected_sources=sources,
-                duration_ms=(time.perf_counter() - started_at) * 1000,
-            ),
-        }
+        return self._build_answer_payload(
+            question=question,
+            answer=answer,
+            sources=sources,
+            generation={
+                "provider": "transcript-structure",
+                "model": None,
+                "responseMode": "factual",
+                "prompt": None,
+            },
+            duration_ms=(time.perf_counter() - started_at) * 1000,
+        )
 
     def _order_sensitive_direction(self, question: str) -> str | None:
         normalized = self._normalize_for_matching(question)

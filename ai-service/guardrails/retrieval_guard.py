@@ -13,6 +13,7 @@ class RetrievalGuardMixin:
             # İlişkisiz kaynakları cevapla birlikte göstermemek gerekir; aksi halde
             # kullanıcıya yanlış bir kanıt ilişkisi sunulmuş olur.
             "sources": [],
+            "citations": [],
             "trace": self._build_trace(
                 generation=guard_result,
                 selected_sources=[],

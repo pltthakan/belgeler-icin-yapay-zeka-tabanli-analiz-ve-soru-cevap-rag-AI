@@ -18,6 +18,7 @@ from chunking.semantic_chunker import SemanticChunkerMixin
 from embeddings.embedding_model import EmbeddingModelMixin
 from embeddings.embedding_service import EmbeddingServiceMixin
 from generation.answer_service import AnswerServiceMixin
+from generation.citation_service import CitationServiceMixin
 from generation.extractive_fallback import ExtractiveFallbackMixin
 from generation.ollama_client import OllamaClientMixin
 from generation.qa_answerer import QaAnswererMixin
@@ -50,6 +51,7 @@ class RagEngine(
     EmbeddingServiceMixin,
     EmbeddingModelMixin,
     AnswerServiceMixin,
+    CitationServiceMixin,
     QaAnswererMixin,
     OllamaClientMixin,
     ExtractiveFallbackMixin,
@@ -248,15 +250,13 @@ class RagEngine(
             return result
 
         answer, generation = self._build_answer_result(question, selected_sources, document_profile)
-        result = {
-            "answer": answer,
-            "sources": selected_sources,
-            "trace": self._build_trace(
-                generation=generation,
-                selected_sources=selected_sources,
-                duration_ms=(time.perf_counter() - started_at) * 1000,
-            ),
-        }
+        result = self._build_answer_payload(
+            question=question,
+            answer=answer,
+            sources=selected_sources,
+            generation=generation,
+            duration_ms=(time.perf_counter() - started_at) * 1000,
+        )
         self._cache_answer(document_id, question, top_k, index_version, result)
         return result
 

@@ -8,5 +8,6 @@ public record ChatMessageResponse(
         String question,
         String answer,
         List<SourceResponse> sources,
+        List<CitationResponse> citations,
         LocalDateTime createdAt
 ) {}

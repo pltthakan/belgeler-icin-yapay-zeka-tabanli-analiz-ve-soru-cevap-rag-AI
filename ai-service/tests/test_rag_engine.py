@@ -105,6 +105,113 @@ class RagEngineAnswerTests(unittest.TestCase):
             "burs oranı kadar öğrenim ücretini kapsamaktadır.",
         )
 
+    def test_supported_claim_gets_inline_citation_and_source_metadata(self):
+        answer = "Fesih bildirim süresi 30 gündür."
+        sources = [{
+            "pageNumber": 2,
+            "chunkIndex": 6,
+            "score": 0.91,
+            "text": "Taraflar fesih için en az 30 gün önce yazılı bildirim yapmalıdır.",
+        }]
+        result = self.engine._build_answer_payload(
+            question="Fesih bildirim süresi kaç gündür?",
+            answer=answer,
+            sources=sources,
+            generation={
+                "provider": "test",
+                "responseMode": "factual",
+                "verificationDecision": {
+                    "supported": True,
+                    "claims": [{
+                        "claim": answer,
+                        "supported": True,
+                        "sourceIndex": 0,
+                        "chunkIndex": 6,
+                        "coverage": 0.8,
+                    }],
+                },
+            },
+            duration_ms=12,
+        )
+
+        self.assertEqual(result["answer"], "Fesih bildirim süresi 30 gündür [1].")
+        self.assertEqual(result["citations"][0]["pageNumber"], 2)
+        self.assertEqual(result["citations"][0]["chunkIndex"], 6)
+        self.assertIn("30 gün", result["citations"][0]["quote"])
+        self.assertEqual(result["trace"]["citationCount"], 1)
+
+    def test_unsupported_claim_does_not_get_a_citation(self):
+        result = self.engine._build_answer_payload(
+            question="Ücret kaç TL'dir?",
+            answer="Ücret 90.000 TL'dir.",
+            sources=[{"pageNumber": 1, "chunkIndex": 2, "text": "Ücret 48.000 TL'dir."}],
+            generation={
+                "provider": "test",
+                "responseMode": "factual",
+                "verificationDecision": {"supported": False, "claims": []},
+            },
+            duration_ms=1,
+        )
+
+        self.assertEqual(result["answer"], "Ücret 90.000 TL'dir.")
+        self.assertEqual(result["citations"], [])
+
+    def test_citation_offsets_do_not_split_words_after_turkish_capital_i(self):
+        first_claim = "ADAY PROFİLİ Aday"
+        second_claim = "React ve Flask kullanmıştır. API tasarımı deneyimi vardır."
+        answer = f"{first_claim}; {second_claim}"
+        source = {"pageNumber": 1, "chunkIndex": 0, "text": answer}
+        result = self.engine._build_answer_payload(
+            question="Adayın deneyimi nedir?",
+            answer=answer,
+            sources=[source],
+            generation={
+                "provider": "test",
+                "responseMode": "factual",
+                "verificationDecision": {
+                    "supported": True,
+                    "claims": [
+                        {"claim": first_claim, "supported": True, "sourceIndex": 0},
+                        {"claim": second_claim, "supported": True, "sourceIndex": 0},
+                    ],
+                },
+            },
+            duration_ms=1,
+        )
+
+        self.assertEqual(
+            result["answer"],
+            "ADAY PROFİLİ Aday [1]; React ve Flask kullanmıştır. API tasarımı deneyimi vardır [2].",
+        )
+        self.assertNotIn("A [", result["answer"])
+
+    def test_citation_quote_is_centered_on_claim_evidence(self):
+        irrelevant_prefix = "Genel proje açıklaması ve idari bilgiler. " * 20
+        source_text = (
+            f"{irrelevant_prefix}Film başlığı ve oyuncu bilgileri TMDB API üzerinden alınmaktadır. "
+            "Sonraki bölümde kullanıcı arayüzü açıklanır."
+        )
+
+        quote = self.engine._citation_quote(
+            "Film verileri TMDB API üzerinden alınmaktadır.",
+            source_text,
+            max_chars=180,
+        )
+
+        self.assertIn("TMDB API", quote)
+        self.assertNotIn("Genel proje açıklaması", quote)
+
+    def test_no_answer_response_never_gets_a_citation(self):
+        result = self.engine._build_answer_payload(
+            question="Bütçe nedir?",
+            answer="Bu bilgi belgede yer almıyor.",
+            sources=[{"pageNumber": 1, "chunkIndex": 0, "text": "Proje takvimi açıklanmıştır."}],
+            generation={"provider": "retrieval-guard", "responseMode": "factual"},
+            duration_ms=1,
+        )
+
+        self.assertEqual(result["citations"], [])
+
     def test_latest_course_question_uses_transcript_term_order(self):
         chunks = [
             {
