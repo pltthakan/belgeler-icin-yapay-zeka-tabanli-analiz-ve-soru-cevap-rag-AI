@@ -32,6 +32,66 @@ Bu proje şu akışı gerçekleştirir:
 <img width="1425" height="762" alt="Ekran Resmi 2026-07-02 22 08 14" src="https://github.com/user-attachments/assets/f05b9ef1-cb34-44f2-ba74-f1db1d5c39f7" />
 
 
+---
+
+## 🛡️ Kurumsal RAG Mimarisi Uyumu
+
+Birçok RAG projesi PoC (Kavram Kanıtlama) aşamasında harika sonuçlar verirken; düzensiz veri yapıları, halüsinasyonlar, yüksek gecikme süreleri veya zayıf orkestrasyon nedeniyle canlı ortamda (production) başarısız olur.
+
+Bu platform, tam olarak bu canlı ortam sorunlarını çözmek amacıyla **6 Katmanlı Kurumsal RAG Mimarisi** standartlarına göre tasarlanmış ve geliştirilmiştir:
+
+| Katman | Sık Karşılaşılan Canlı Ortam Hatası | Bizim Üretime Hazır Çözümümüz | Teknoloji Yığını & Bileşenler |
+| :--- | :--- | :--- | :--- |
+| **1. Veri Kaynakları** | Monolitik bağımlılık ve bloklanan istekler | DLQ (Dead Letter Queue) destekli, kuyruk tabanlı ve asenkron dağıtık belge işleme akışı | `Spring Boot` + `RabbitMQ` + `Spring Worker` |
+| **2. Ön İşleme** | "Kör parçalama" (belge yapısının ve tabloların kaybolması) | Başlık farkındalıklı yapı tespiti (Heading-aware) ve semantik yedekleme (fallback) | `FastAPI (ingestion & chunking)` + `python-docx` |
+| **3. İndeksleme** | Vektör yetersizliği ve ölçekleme sorunları | Yüksek ölçeklenebilirlikli yoğun vektör araması | `pgvector (HNSW cosine similarity)` |
+| **4. Hibrit Arama** | "Ortada Kaybolma" (LLM'in kritik bağlamı kaçırması) | Aday kaynakları optimize etmek için Cross-Encoder tabanlı yeniden sıralama (Reranking) | `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` |
+| **5. LLM ve Üretim** | Halüsinasyonlar ve güvenilmez, uydurma yanıtlar | Atomik iddia bazlı doğrulama, sıkı bağlam kontrolü ve tıklanabilir inline citation (atıf) motoru | `guardrails/claim_validator.py` + React UI Citations |
+| **6. Gözlemlenebilirlik** | Metrik takibi yapılamayan kör operasyonlar | Otomatik regresyon testleri, gecikme (latency) izleme ve Redis cache telemetrisi | `evaluation/run_evaluation.py` + Redis metrics |
+
+---
+
+### 🔄 Sistem Mimarisi ve Veri Akışı
+
+Sistemimizde uygulanan uçtan uca asenkron ve doğrulanmış RAG veri akışı aşağıdaki gibidir:
+
+```mermaid
+graph TD
+    %% Stil Tanımlamaları
+    classDef client fill:#f9f,stroke:#333,stroke-width:2px;
+    classDef backend fill:#bbf,stroke:#333,stroke-width:2px;
+    classDef ai fill:#f96,stroke:#333,stroke-width:2px;
+    
+    %% Belge Yükleme Akışı
+    User((Kullanıcı)) -->|1. Belgeyi Yükler| SpringBoot[Spring Boot Backend]:::backend
+    SpringBoot -->|2. Durumu Günceller: PROCESSING| DB[(PostgreSQL + pgvector)]
+    SpringBoot -->|3. İşi Kuyruğa Gönderir| RabbitMQ{RabbitMQ}
+    RabbitMQ -->|4. İşi Tüketir| Worker[Spring Worker]:::backend
+    Worker -->|5. İndeksleme API'sini Tetikler| FastAPI:::ai
+    
+    %% AI Servisi İşleme Akışı
+    subgraph FastAPI [FastAPI Yapay Zeka Servisi]
+        Parser[Başlık Farkındalıklı Parser] --> Chunking[Semantik Bölümleme]
+        Chunking --> Embed[MiniLM Embedding Üretimi]
+    end
+    
+    Embed -->|6. Chunkları Kaydeder & Durum: READY| DB
+    
+    %% Sorgu ve Guardrail Akışı
+    User -->|7. Soru Sorar| SpringBoot
+    SpringBoot -->|8. Soruyu İletir| FastAPI
+    DB -.->|9. En Yakın Chunkları Getirir| FastAPI
+    
+    subgraph Guardrails [Korkuluk ve Doğrulama Katmanı]
+        Reranker[Cross-Encoder Reranker] --> LLM[Ollama / Fallback QA]
+        LLM --> ClaimVal[İddia Bazlı Doğrulayıcı]
+        ClaimVal --> Citation[Citation Üretici]
+    end
+    
+    Citation -->|10. Doğrulanmış Yanıt + Inline Atıflar| SpringBoot
+    SpringBoot -->|11. Güvenli Cevap ve Kaynak Gösterimi| User
+
+
 
 
 
